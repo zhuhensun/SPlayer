@@ -59,13 +59,15 @@ export const checkQr = (key) => {
  */
 export const toLogin = (phone, captcha) => {
   return axios({
-    method: "GET",
+    method: "POST",
     hiddenBar: true,
     url: "/login/cellphone",
     params: {
+      timestamp: new Date().getTime(),
+    },
+    data: {
       phone,
       captcha,
-      timestamp: new Date().getTime(),
     },
   });
 };
@@ -76,12 +78,12 @@ export const toLogin = (phone, captcha) => {
  */
 export const sentCaptcha = (phone) => {
   return axios({
-    method: "GET",
+    method: "POST",
     url: "/captcha/sent",
     params: {
-      phone,
       timestamp: new Date().getTime(),
     },
+    data: { phone },
   });
 };
 

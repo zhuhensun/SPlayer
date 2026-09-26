@@ -56,27 +56,28 @@
             </n-input>
           </n-form-item>
           <n-form-item path="captcha">
-            <n-input-number
+            <n-input
               style="width: 100%"
               placeholder="请输入短信验证码"
               v-model:value="phoneFormData.captcha"
-              :show-button="false"
+              :input-props="{ inputmode: 'numeric', autocomplete: 'one-time-code' }"
             >
               <template #prefix>
                 <n-icon :component="PasswordRound" />
               </template>
-            </n-input-number>
+            </n-input>
             <n-button
               type="primary"
               style="margin-left: 12px"
-              :disabled="captchaDisabled"
+              :disabled="captchaDisabled || captchaSending || phoneLoginLoading"
+              :loading="captchaSending"
               @click="getCaptcha(phoneFormData.phone)"
             >
               {{ captchaText }}
             </n-button>
           </n-form-item>
           <n-form-item>
-            <n-button style="width: 100%" type="primary" @click="phoneLogin">
+            <n-button style="width: 100%" type="primary" :loading="phoneLoginLoading" @click="phoneLogin">
               {{ $t("login.login") }}
             </n-button>
           </n-form-item>
@@ -102,7 +103,6 @@ import {
   checkQr,
   toLogin,
   sentCaptcha,
-  verifyCaptcha,
 } from "@/api/login";
 import { useRouter } from "vue-router";
 import { PhoneAndroidRound, PasswordRound } from "@vicons/material";
@@ -116,7 +116,7 @@ const user = userStore();
 const music = musicStore();
 const setting = settingStore();
 const siteTitle = import.meta.env.VITE_SITE_TITLE;
-const { numberRule, mobileRule } = formRules();
+const { mobileRule } = formRules();
 
 // 二维码数据
 const qrImg = ref(null);
@@ -126,15 +126,22 @@ const loginStatus = ref(t("login.loginStatus1"));
 const phoneFormRef = ref(null);
 const phoneFormData = ref({
   phone: null,
-  captcha: null,
+  captcha: "",
 });
 const phoneFormRules = {
   phone: mobileRule,
-  captcha: numberRule,
+  captcha: {
+    required: true,
+    pattern: /^\d+$/,
+    message: "请输入短信中的完整数字验证码",
+    trigger: ["input", "blur"],
+  },
 };
 const captchaTimeOut = ref(null);
 const captchaText = ref(t("login.getCode"));
 const captchaDisabled = ref(false);
+const captchaSending = ref(false);
+const phoneLoginLoading = ref(false);
 
 // 定时器
 const qrCheckInterval = ref(null);
@@ -143,26 +150,29 @@ const qrCheckInterval = ref(null);
 const loginStateMessage = ref(null);
 
 // 储存登录信息
-const saveLoginData = (data) => {
-  data.cookie = data.cookie.replaceAll(" HTTPOnly", "");
-  user.setCookie(data.cookie);
-  // 验证用户登录信息
-  getLoginState().then((res) => {
-    if (res.data.profile) {
-      user.setUserData(res.data.profile);
-      user.userLogin = true;
-      loginStatus.value = t("login.loginStatus4");
-      $message.success(t("login.loginStatus4"));
-      // 自动签到
-      if ($signIn) $signIn();
-      clearInterval(qrCheckInterval.value);
-      router.push("/user");
-    } else {
-      user.userLogOut();
-      $message.error(t("login.loginStatus5"));
-      getQrKeyData();
-    }
-  });
+const loginErrorMessage = (error) => {
+  const body = error?.response?.data || error;
+  const message = body?.message || body?.msg || t("login.loginStatus5");
+  return body?.code != null ? `${message}（${body.code}）` : message;
+};
+
+const saveLoginData = async (data) => {
+  if (typeof data.cookie !== "string" || !data.cookie) {
+    throw new Error("登录接口未返回有效凭据，请稍后重试");
+  }
+  // 等浏览器携带登录 Cookie 验证成功后，再统一保存状态、提示和跳转。
+  const res = await getLoginState();
+  if (!res.data?.profile) {
+    throw new Error("登录状态验证失败，请检查浏览器是否允许保存 Cookie");
+  }
+  user.setCookie(data.cookie.replaceAll(" HTTPOnly", ""));
+  user.setUserData(res.data.profile);
+  user.userLogin = true;
+  loginStatus.value = t("login.loginStatus4");
+  $message.success(t("login.loginStatus4"));
+  clearInterval(qrCheckInterval.value);
+  if (typeof $signIn === "function") $signIn();
+  await router.push("/user");
 };
 
 // 获取二维码登录 key
@@ -178,7 +188,6 @@ const getQrKeyData = () => {
       clearInterval(qrCheckInterval.value);
       getQrKey().then((res) => {
         if (res.code == 200) {
-          console.log(res.data.unikey);
           qrImg.value = `https://music.163.com/login?codekey=${res.data.unikey}`;
           checkQrState(res.data.unikey);
         } else {
@@ -194,7 +203,6 @@ const checkQrState = (key) => {
   qrCheckInterval.value = setInterval(() => {
     if (!key) return false;
     checkQr(key).then((res) => {
-      console.log(res);
       if (res.code == 800) {
         getQrKeyData();
         loginStateMessage.value = null;
@@ -210,95 +218,81 @@ const checkQrState = (key) => {
           });
         }
       } else if (res.code == 803) {
-        loginStateMessage.value.destroy();
-        saveLoginData(res);
+        clearInterval(qrCheckInterval.value);
+        loginStateMessage.value?.destroy();
+        saveLoginData(res).catch((error) => {
+          $message.error(loginErrorMessage(error));
+          getQrKeyData();
+        });
       }
     });
   }, 1000);
 };
 
 // 获取验证码
-const getCaptcha = (data) => {
-  clearInterval(captchaTimeOut.value);
-  phoneFormRef.value?.validate(
-    (errors) => {
-      if (errors) {
-      $message.error(t("general.message.needCheck"));
-      } else {
-        console.log(data + "发送验证码");
-        sentCaptcha(data).then((res) => {
-          console.log(res);
-          if (res.code == 200) {
-            $message.success(t("login.codeSuccess"));
-            let countDown = 60;
-            captchaDisabled.value = true;
-            captchaTimeOut.value = setInterval(() => {
-              countDown--;
-              captchaText.value = countDown + "s";
-              if (countDown === 0) {
-                clearInterval(captchaTimeOut.value);
-                captchaText.value = t("login.getCodeAgain");
-                captchaDisabled.value = false;
-              }
-            }, 1000);
-          } else {
-            $message.error(t("login.codeError"));
-          }
-        });
+const getCaptcha = async (phone) => {
+  if (captchaSending.value || captchaDisabled.value || phoneLoginLoading.value) return;
+  captchaSending.value = true;
+  try {
+    await phoneFormRef.value.validate(null, (rule) => rule?.key === "phone");
+  } catch {
+    captchaSending.value = false;
+    $message.error(t("general.message.needCheck"));
+    return;
+  }
+  try {
+    const res = await sentCaptcha(phone.trim());
+    if (res.code !== 200) throw res;
+    $message.success(t("login.codeSuccess"));
+    clearInterval(captchaTimeOut.value);
+    let countDown = 60;
+    captchaDisabled.value = true;
+    captchaText.value = `${countDown}s`;
+    captchaTimeOut.value = setInterval(() => {
+      countDown--;
+      captchaText.value = `${countDown}s`;
+      if (countDown === 0) {
+        clearInterval(captchaTimeOut.value);
+        captchaText.value = t("login.getCodeAgain");
+        captchaDisabled.value = false;
       }
-    },
-    (rule) => {
-      return rule?.key === "phone";
-    }
-  );
+    }, 1000);
+  } catch (error) {
+    $message.error(loginErrorMessage(error));
+  } finally {
+    captchaSending.value = false;
+  }
 };
 
-// 手机号登录
-const phoneLogin = (e) => {
-  e.preventDefault();
-  phoneFormRef.value?.validate((errors) => {
-    if (!errors) {
-      console.log("通过");
-      verifyCaptcha(phoneFormData._value.phone, phoneFormData._value.captcha)
-        .then((res) => {
-          console.log(res);
-          if (res.code == 200) {
-            toLogin(
-              phoneFormData._value.phone,
-              phoneFormData._value.captcha
-            ).then((res) => {
-              console.log(res);
-              if (res.profile) {
-                saveLoginData(res);
-                user.setUserData(res.profile);
-                user.userLogin = true;
-                $message.success(t("login.loginStatus4"));
-                // 自动签到
-                if ($signIn) $signIn();
-                router.push("/user");
-              } else {
-                user.userLogOut();
-                $message.error(t("login.loginStatus5"));
-                phoneFormData.value.captcha = null;
-              }
-            });
-          }
-        })
-        .catch((err) => {
-          console.error(err);
-          $loadingBar.error();
-          $message.error(t("login.loginStatus5"));
-        });
-    } else {
-      $loadingBar.error();
-      $message.error(t("general.message.needCheck"));
-    }
-  });
+// 手机号登录：登录接口本身校验验证码，不再额外调用 captcha/verify。
+const phoneLogin = async (event) => {
+  event.preventDefault();
+  if (phoneLoginLoading.value || captchaSending.value) return;
+  phoneLoginLoading.value = true;
+  try {
+    await phoneFormRef.value.validate();
+  } catch {
+    phoneLoginLoading.value = false;
+    $message.error(t("general.message.needCheck"));
+    return;
+  }
+  try {
+    const res = await toLogin(
+      phoneFormData.value.phone.trim(),
+      phoneFormData.value.captcha.trim()
+    );
+    if (res.code !== 200) throw res;
+    await saveLoginData(res);
+  } catch (error) {
+    $loadingBar.error();
+    $message.error(loginErrorMessage(error));
+  } finally {
+    phoneLoginLoading.value = false;
+  }
 };
 
 // Tab 切换
 const tabChange = (val) => {
-  console.log(val);
   if (val == "qr") {
     getQrKeyData();
   } else {
