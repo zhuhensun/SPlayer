@@ -1,0 +1,666 @@
+/**
+ * LyricsProcessor Format Parser
+ * 歌词格式解析器 - LRC/YRC/AM格式转换 (优化版)
+ */
+
+import type { LyricLine, AMLLLine, ParsedLrcLine, ParsedYrcLine, InputLyricLine } from "../types";
+import { msToS } from "@/utils/timeTools";
+
+// Pre-compiled regex for interlude detection
+const INTERLUDE_CHARS_REGEX = /[\s♪♩♫♬🎵🎶🎼·…\-_—─●◆◇○■□▲△▼▽★☆♥♡❤💕、。，,.!！?？~～]/gu;
+
+// Pre-compiled regex for splitting roma text
+const ROMA_SPLIT_REGEX = /\s+/;
+
+const MIN_LINE_DURATION_MS = 800;
+const FALLBACK_LAST_LINE_DURATION_MS = 5000;
+
+interface TimedSourceLine {
+  words?: readonly {
+    word?: string;
+    startTime?: number;
+    endTime?: number;
+    romanWord?: string;
+  }[];
+  startTime?: number;
+  endTime?: number;
+}
+
+type TimedSourceWord = NonNullable<TimedSourceLine["words"]>[number];
+
+function finiteTime(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function sourceLineStart(line: TimedSourceLine | undefined): number | undefined {
+  if (!line) return undefined;
+  return finiteTime(line.startTime) ?? finiteTime(line.words?.[0]?.startTime);
+}
+
+function sourceLineWordEnd(line: TimedSourceLine | undefined): number | undefined {
+  const words = line?.words;
+  if (!words?.length) return undefined;
+
+  let endTime: number | undefined;
+  for (let i = 0; i < words.length; i++) {
+    const wordEnd = finiteTime(words[i].endTime);
+    if (wordEnd !== undefined && (endTime === undefined || wordEnd > endTime)) {
+      endTime = wordEnd;
+    }
+  }
+  return endTime;
+}
+
+function nextLineStart(
+  lines: readonly TimedSourceLine[],
+  index: number,
+  startTime: number,
+): number | undefined {
+  for (let i = index + 1; i < lines.length; i++) {
+    const nextStart = sourceLineStart(lines[i]);
+    if (nextStart !== undefined && nextStart > startTime) return nextStart;
+  }
+  return undefined;
+}
+
+function resolveLineStart(line: TimedSourceLine): number {
+  return sourceLineStart(line) ?? 0;
+}
+
+function resolveLineEnd(
+  lines: readonly TimedSourceLine[],
+  index: number,
+  startTime: number,
+  preferNextStart: boolean,
+): number {
+  const line = lines[index];
+  const explicitEnd = finiteTime(line?.endTime);
+  const wordEnd = sourceLineWordEnd(line);
+  const nextStart = nextLineStart(lines, index, startTime);
+
+  let endTime =
+    preferNextStart && nextStart !== undefined
+      ? nextStart
+      : explicitEnd !== undefined && explicitEnd > startTime
+        ? explicitEnd
+        : wordEnd !== undefined && wordEnd > startTime
+          ? wordEnd
+          : nextStart !== undefined
+            ? nextStart
+            : startTime + FALLBACK_LAST_LINE_DURATION_MS;
+
+  if (endTime <= startTime) {
+    endTime = startTime + MIN_LINE_DURATION_MS;
+  }
+
+  return endTime;
+}
+
+interface ResolvedWordTime {
+  startTime: number;
+  endTime: number;
+}
+
+/**
+ * 判断一行的 words 是否携带可用的逐字时间轴。
+ * 至少存在一个正时长的 word，或存在两个不同的起始时间，才视为可用；
+ * 否则（全部缺失/全部相同起点且零时长）按退化数据处理。
+ */
+function hasUsableWordTiming(words: readonly TimedSourceWord[]): boolean {
+  let firstStart: number | undefined;
+  for (let i = 0; i < words.length; i++) {
+    const start = finiteTime(words[i].startTime);
+    const end = finiteTime(words[i].endTime);
+    if (start !== undefined && end !== undefined && end > start) return true;
+    if (start !== undefined) {
+      if (firstStart === undefined) {
+        firstStart = start;
+      } else if (start !== firstStart) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * 退化数据兜底：按可见字符数把行时长均匀分配给每个 word，
+ * 保证渲染端仍能得到递进的逐字时间，而不是整行同时高亮。
+ */
+function distributeWordTimesEvenly(
+  words: readonly TimedSourceWord[],
+  lineStartTime: number,
+  lineEndTime: number,
+): ResolvedWordTime[] {
+  const len = words.length;
+  const result: ResolvedWordTime[] = [];
+  result.length = len;
+
+  const weights: number[] = [];
+  weights.length = len;
+  let totalWeight = 0;
+  for (let i = 0; i < len; i++) {
+    const weight = (words[i].word ?? "").trim().length;
+    weights[i] = weight;
+    totalWeight += weight;
+  }
+
+  const span = Math.max(0, lineEndTime - lineStartTime);
+  let cursor = lineStartTime;
+  for (let i = 0; i < len; i++) {
+    const weight = totalWeight > 0 ? weights[i] : 1;
+    const denominator = totalWeight > 0 ? totalWeight : len;
+    const duration = (span * weight) / denominator;
+    const endTime = i === len - 1 ? lineEndTime : cursor + duration;
+    result[i] = { startTime: cursor, endTime };
+    cursor = endTime;
+  }
+
+  return result;
+}
+
+/**
+ * 解析一行内全部 word 的起止时间。
+ * 时间缺失或非递增时，回退顺序为：下一个 word 的开始时间 →（末尾 word）行结束时间 → 零时长。
+ * 不再把中间 word 兜底到行结束时间——那会让多个 word 同时覆盖整行，
+ * 造成逐字歌词整行一起高亮。
+ */
+function resolveLineWordTimes(
+  words: readonly TimedSourceWord[],
+  lineStartTime: number,
+  lineEndTime: number,
+): ResolvedWordTime[] {
+  if (!hasUsableWordTiming(words)) {
+    return distributeWordTimesEvenly(words, lineStartTime, lineEndTime);
+  }
+
+  const len = words.length;
+  const result: ResolvedWordTime[] = [];
+  result.length = len;
+
+  let prevEnd = lineStartTime;
+  for (let i = 0; i < len; i++) {
+    const word = words[i];
+    const startTime = finiteTime(word.startTime) ?? prevEnd;
+    let endTime = finiteTime(word.endTime);
+
+    if (endTime === undefined || endTime <= startTime) {
+      const nextStart = finiteTime(words[i + 1]?.startTime);
+      if (nextStart !== undefined && nextStart > startTime) {
+        endTime = nextStart;
+      } else if (i === len - 1 && lineEndTime > startTime) {
+        endTime = lineEndTime;
+      } else {
+        endTime = startTime;
+      }
+    }
+
+    result[i] = { startTime, endTime };
+    prevEnd = endTime;
+  }
+
+  return result;
+}
+
+/**
+ * 判断是否为间奏行
+ */
+function isInterludeContent(content: string): boolean {
+  if (!content) return true;
+  const stripped = content.replace(INTERLUDE_CHARS_REGEX, "");
+  return stripped.length === 0;
+}
+
+/**
+ * 将行级音译文本拆分为逐字音译
+ * @param words 该行的单词数组
+ * @param romaText 该行的完整音译文本（空格分隔）
+ * @returns 逐字音译数组（与 words 等长），匹配失败时返回 null
+ */
+export function splitRomaToWords(
+  words: readonly { word: string }[],
+  romaText: string,
+): string[] | null {
+  if (!romaText || words.length === 0) return null;
+
+  const segments = romaText.trim().split(ROMA_SPLIT_REGEX);
+  if (segments.length === 0) return null;
+
+  // Collect indices of content words (non-empty after trim)
+  const contentIndices: number[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].word.trim()) {
+      contentIndices.push(i);
+    }
+  }
+
+  // Must match 1:1
+  if (contentIndices.length === 0 || segments.length !== contentIndices.length) {
+    return null;
+  }
+
+  const result = Array.from<string>({ length: words.length }).fill("");
+  for (let i = 0; i < contentIndices.length; i++) {
+    result[contentIndices[i]] = segments[i];
+  }
+
+  return result;
+}
+
+/**
+ * Process parsed Lyric data into easier to use format (优化版)
+ * @param lrcData Array of LyricLine objects (times in ms)
+ * @returns ParsedLrcLine[] with times in seconds
+ */
+export const parseLrcLines = (lrcData: LyricLine[]): ParsedLrcLine[] => {
+  if (!lrcData || lrcData.length === 0) {
+    return [];
+  }
+
+  const len = lrcData.length;
+  const result: ParsedLrcLine[] = [];
+  result.length = len; // Pre-allocate
+
+  let count = 0;
+  for (let i = 0; i < len; i++) {
+    const line = lrcData[i];
+    const words = line.words;
+
+    if (!words || words.length === 0) continue;
+
+    // Get start time and build content in one pass
+    const startTime = words[0].startTime;
+    let content = "";
+    for (let j = 0; j < words.length; j++) {
+      content += words[j].word || "";
+    }
+
+    const trimmed = content.trim();
+    if (!trimmed) continue;
+
+    result[count++] = {
+      time: msToS(startTime),
+      content: trimmed,
+    };
+  }
+
+  result.length = count;
+  return result;
+};
+
+/**
+ * Parse YRC (word-by-word) lyrics (优化版)
+ * @param yrcData Array of LyricLine objects (times in ms)
+ * @returns ParsedYrcLine[] with times in seconds
+ */
+export const parseYrcLines = (yrcData: LyricLine[]): ParsedYrcLine[] => {
+  if (!yrcData || yrcData.length === 0) return [];
+
+  const len = yrcData.length;
+  const result: ParsedYrcLine[] = [];
+  result.length = len;
+
+  let count = 0;
+  for (let i = 0; i < len; i++) {
+    const line = yrcData[i];
+    const words = line.words;
+
+    if (!words || words.length === 0) continue;
+
+    const wordsLen = words.length;
+    const lineStartTime = resolveLineStart(line);
+    const lineEndTime = resolveLineEnd(yrcData, i, lineStartTime, false);
+    const time = msToS(lineStartTime);
+    const endTime = msToS(lineEndTime);
+    const wordTimes = resolveLineWordTimes(words, lineStartTime, lineEndTime);
+
+    // Build content array and string in one pass
+    const content: ParsedYrcLine["content"] = [];
+    content.length = wordsLen;
+    let textContent = "";
+
+    for (let j = 0; j < wordsLen; j++) {
+      const word = words[j];
+      const wordTime = wordTimes[j];
+      const wordText = word.word;
+      // Preserve original word text including trailing spaces.
+      // TTML lyrics rely on trailing spaces to separate words;
+      // trimming here would cause words to be concatenated together.
+      const endsWithSpace = wordText.endsWith(" ");
+      const processedWord = wordText;
+
+      content[j] = {
+        time: msToS(wordTime.startTime),
+        endTime: msToS(wordTime.endTime),
+        duration: msToS(wordTime.endTime - wordTime.startTime),
+        content: processedWord,
+        endsWithSpace,
+      };
+
+      textContent += processedWord;
+    }
+
+    if (!textContent) continue;
+
+    result[count++] = {
+      time,
+      endTime,
+      content,
+      TextContent: textContent,
+    };
+  }
+
+  result.length = count;
+  return result;
+};
+
+/**
+ * Parse lyrics for Apple Music like format using index-based matching (优化版)
+ * @param lrcData Main lyrics array (times in ms)
+ * @param tranData Translation lyrics array (times in ms)
+ * @param romaData Romanization lyrics array (times in ms)
+ * @returns AMLLLine[] Formatted lyrics array
+ */
+export const buildAMLLData = (
+  lrcData: LyricLine[],
+  tranData: LyricLine[] = [],
+  romaData: LyricLine[] = [],
+): AMLLLine[] => {
+  const lrcLen = lrcData.length;
+  if (lrcLen === 0) return [];
+
+  // Extract valid translation/romaji content in single pass
+  const tranContents: string[] = [];
+  const romaContents: string[] = [];
+
+  if (tranData.length > 0) {
+    for (let i = 0; i < tranData.length; i++) {
+      const words = tranData[i].words;
+      if (words && words.length > 0) {
+        let content = "";
+        for (let j = 0; j < words.length; j++) {
+          content += words[j].word;
+        }
+        if (!isInterludeContent(content)) {
+          tranContents.push(content);
+        }
+      }
+    }
+  }
+
+  if (romaData.length > 0) {
+    for (let i = 0; i < romaData.length; i++) {
+      const words = romaData[i].words;
+      if (words && words.length > 0) {
+        let content = "";
+        for (let j = 0; j < words.length; j++) {
+          content += words[j].word;
+        }
+        if (!isInterludeContent(content)) {
+          romaContents.push(content);
+        }
+      }
+    }
+  }
+
+  // Collect valid main line indices
+  const validMainIndices: number[] = [];
+  validMainIndices.length = lrcLen;
+  let validCount = 0;
+
+  for (let i = 0; i < lrcLen; i++) {
+    const words = lrcData[i].words;
+    if (words && words.length > 0) {
+      let content = "";
+      for (let j = 0; j < words.length; j++) {
+        content += words[j].word;
+      }
+      if (!isInterludeContent(content)) {
+        validMainIndices[validCount++] = i;
+      }
+    }
+  }
+  validMainIndices.length = validCount;
+
+  // Build index maps for translation/romaji
+  const tranMap = new Map<number, string>();
+  const romaMap = new Map<number, string>();
+
+  // Index-based matching when counts are equal
+  if (tranContents.length === validCount) {
+    for (let i = 0; i < tranContents.length; i++) {
+      tranMap.set(validMainIndices[i], tranContents[i]);
+    }
+  } else if (tranContents.length > 0 && tranData.length > 0) {
+    // Time-based matching with binary search
+    const mainTimes: { idx: number; time: number }[] = [];
+    for (let i = 0; i < validCount; i++) {
+      const idx = validMainIndices[i];
+      mainTimes.push({ idx, time: lrcData[idx].words[0].startTime });
+    }
+    mainTimes.sort((a, b) => a.time - b.time);
+
+    let tranIdx = 0;
+    for (let i = 0; i < tranData.length && tranIdx < tranContents.length; i++) {
+      const words = tranData[i].words;
+      if (words && words.length > 0) {
+        let content = "";
+        for (let j = 0; j < words.length; j++) {
+          content += words[j].word;
+        }
+        if (!isInterludeContent(content)) {
+          const tranTime = words[0].startTime;
+
+          // Binary search
+          let left = 0,
+            right = mainTimes.length - 1;
+          let bestIdx = -1,
+            bestDiff = Infinity;
+
+          while (left <= right) {
+            const mid = (left + right) >> 1;
+            const diff = Math.abs(mainTimes[mid].time - tranTime);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = mainTimes[mid].idx;
+            }
+            if (mainTimes[mid].time < tranTime) {
+              left = mid + 1;
+            } else {
+              right = mid - 1;
+            }
+          }
+
+          if (bestIdx >= 0 && bestDiff < 10000) {
+            tranMap.set(bestIdx, tranContents[tranIdx]);
+          }
+          tranIdx++;
+        }
+      }
+    }
+  }
+
+  if (romaContents.length === validCount) {
+    for (let i = 0; i < romaContents.length; i++) {
+      romaMap.set(validMainIndices[i], romaContents[i]);
+    }
+  } else if (romaContents.length > 0 && romaData.length > 0) {
+    // Time-based matching with binary search
+    const mainTimes: { idx: number; time: number }[] = [];
+    for (let i = 0; i < validCount; i++) {
+      const idx = validMainIndices[i];
+      mainTimes.push({ idx, time: lrcData[idx].words[0].startTime });
+    }
+    mainTimes.sort((a, b) => a.time - b.time);
+
+    let romaIdx = 0;
+    for (let i = 0; i < romaData.length && romaIdx < romaContents.length; i++) {
+      const words = romaData[i].words;
+      if (words && words.length > 0) {
+        let content = "";
+        for (let j = 0; j < words.length; j++) {
+          content += words[j].word;
+        }
+        if (!isInterludeContent(content)) {
+          const romaTime = words[0].startTime;
+
+          // Binary search
+          let left = 0,
+            right = mainTimes.length - 1;
+          let bestIdx = -1,
+            bestDiff = Infinity;
+
+          while (left <= right) {
+            const mid = (left + right) >> 1;
+            const diff = Math.abs(mainTimes[mid].time - romaTime);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = mainTimes[mid].idx;
+            }
+            if (mainTimes[mid].time < romaTime) {
+              left = mid + 1;
+            } else {
+              right = mid - 1;
+            }
+          }
+
+          if (bestIdx >= 0 && bestDiff < 10000) {
+            romaMap.set(bestIdx, romaContents[romaIdx]);
+          }
+          romaIdx++;
+        }
+      }
+    }
+  }
+
+  // Build result array
+  const result: AMLLLine[] = [];
+  result.length = lrcLen;
+
+  for (let i = 0; i < lrcLen; i++) {
+    const line = lrcData[i];
+    const words = line.words || [];
+    const wordsLen = words.length;
+
+    const firstWord = wordsLen > 0 ? words[0] : null;
+    const startTime = firstWord
+      ? (finiteTime(firstWord.startTime) ?? resolveLineStart(line))
+      : resolveLineStart(line);
+    const endTime = resolveLineEnd(lrcData, i, startTime, true);
+    const wordTimes = resolveLineWordTimes(words, startTime, endTime);
+
+    // Build words array efficiently
+    const resultWords: AMLLLine["words"] = [];
+    resultWords.length = wordsLen;
+
+    for (let j = 0; j < wordsLen; j++) {
+      const w = words[j];
+      const wordTime = wordTimes[j];
+      resultWords[j] = {
+        word: w.word,
+        startTime: wordTime.startTime,
+        endTime: wordTime.endTime,
+        romanWord: w.romanWord || "",
+      };
+    }
+
+    const romaText = romaMap.get(i) || "";
+
+    result[i] = {
+      words: resultWords,
+      startTime,
+      endTime,
+      translatedLyric: tranMap.get(i) || "",
+      romanLyric: romaText,
+      isBG: line.isBG ?? false,
+      isDuet: line.isDuet ?? false,
+    };
+
+    // 逐字音译：优先使用源数据（TTML）中的 romanWord
+    // 若无逐字音译但有行级音译，尝试拆分为逐字
+    let hasPerWordRoma = false;
+    for (let j = 0; j < wordsLen; j++) {
+      if (resultWords[j].romanWord) {
+        hasPerWordRoma = true;
+        break;
+      }
+    }
+
+    if (hasPerWordRoma) {
+      // 有逐字音译时清除行级音译，避免重复显示
+      result[i].romanLyric = "";
+    } else if (romaText) {
+      // 尝试将行级音译拆分为逐字
+      const perWord = splitRomaToWords(resultWords, romaText);
+      if (perWord) {
+        for (let j = 0; j < wordsLen; j++) {
+          resultWords[j].romanWord = perWord[j] || "";
+        }
+        result[i].romanLyric = ""; // 避免重复显示
+      }
+    }
+  }
+
+  return result;
+};
+
+/**
+ * 转换歌词行数据为 AMLL 格式 (优化版)
+ * @param lines InputLyricLine[] 输入歌词行
+ * @returns AMLLLine[] AMLL格式歌词行
+ */
+export function convertToAMLL(lines: InputLyricLine[]): AMLLLine[] {
+  const len = lines.length;
+  const result: AMLLLine[] = [];
+  result.length = len;
+
+  for (let i = 0; i < len; i++) {
+    const l = lines[i];
+    const sourceWords = l.words || [];
+    const wordsLen = sourceWords.length;
+    const startTime = resolveLineStart(l);
+    const endTime = resolveLineEnd(lines, i, startTime, false);
+    const wordTimes = resolveLineWordTimes(sourceWords, startTime, endTime);
+
+    // Build words array
+    const words: AMLLLine["words"] = [];
+    words.length = wordsLen;
+
+    for (let j = 0; j < wordsLen; j++) {
+      const w = sourceWords[j];
+      const wordTime = wordTimes[j];
+      words[j] = {
+        startTime: wordTime.startTime,
+        endTime: wordTime.endTime,
+        word: w.word,
+        romanWord: w.romanWord || "",
+      };
+    }
+
+    // 有逐字音译时清除行级音译，避免重复显示
+    let hasPerWordRoma = false;
+    for (let j = 0; j < wordsLen; j++) {
+      if (words[j].romanWord) {
+        hasPerWordRoma = true;
+        break;
+      }
+    }
+
+    result[i] = {
+      words,
+      translatedLyric: l.translatedLyric ?? "",
+      romanLyric: hasPerWordRoma ? "" : (l.romanLyric ?? ""),
+      isBG: l.isBG ?? false,
+      isDuet: l.isDuet ?? false,
+      startTime,
+      endTime,
+    };
+  }
+
+  return result;
+}
+
+// Backward compatibility exports
+export const parseLrcData = parseLrcLines;
+export const parseYrcData = parseYrcLines;
+export const parseAMData = buildAMLLData;

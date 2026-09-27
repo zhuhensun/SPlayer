@@ -1,0 +1,21 @@
+[package]
+name = "audio-analysis"
+version = "0.1.0"
+edition = "2021"
+description = "Unified FFT spectrum analysis + low-frequency volume detection (replaces AMLL FFTPlayer + WasmFFTManager + LowFreqVolumeAnalyzer)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustfft = "6"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+# NOTE: `[profile.*]` is only honoured at the workspace root
+# (`src-tauri/Cargo.toml`), which already enables opt-level = 3 + fat LTO for
+# release. A crate-level profile would be silently ignored, so it is omitted.
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

@@ -3,11 +3,7 @@
     <div
       class="countdown"
       :style="{ animationPlayState: music.getPlayState ? 'running' : 'paused' }"
-      v-if="
-        remainingPoint <= 2 &&
-        totalDuration > 1 &&
-        music.getPlaySongLyric.lrc[0]
-      "
+      v-if="remainingPoint <= 2 && totalDuration > 1 && music.getPlaySongLyric.lrc[0]"
     >
       <span class="point" :class="remainingPoint > 2 ? 'hidden' : null">●</span>
       <span class="point" :class="remainingPoint > 1 ? 'hidden' : null">●</span>
@@ -18,9 +14,9 @@
 
 <script setup>
 import { musicStore } from "@/store";
-import { ref, watch } from 'vue';
+import { ref, watch } from "vue";
 
-const emit = defineEmits(['countdown-end']);
+const emit = defineEmits(["countdown-end"]);
 const music = musicStore();
 
 // 剩余点数
@@ -33,21 +29,20 @@ watch(
   () => music.getPlaySongTime.currentTime,
   (val) => {
     if (music.getPlaySongLyric) {
-      const lyric =
-        music.getPlaySongLyric.lrc[0] || music.getPlaySongLyric.yrc[0];
+      const lyric = music.getPlaySongLyric.lrc[0] || music.getPlaySongLyric.yrc[0];
       if (lyric) {
         totalDuration.value = lyric.time;
         const remainingTime = totalDuration.value - val - 0.5;
         const progress = 1 - remainingTime / totalDuration.value;
         remainingPoint.value = Number(Math.floor(3 * progress));
-        
+
         // 当倒计时结束时触发事件
         if (remainingPoint.value >= 3) {
-          emit('countdown-end');
+          emit("countdown-end");
         }
       }
     }
-  }
+  },
 );
 
 // 监听歌曲改变
@@ -61,14 +56,14 @@ watch(
         remainingPoint.value = 0;
       }
     }
-  }
+  },
 );
 </script>
 
 <style lang="scss" scoped>
 .v-enter-active,
 .v-leave-active {
-  transition: all 0.3s ease-in-out;
+  transition: all var(--duration-300) var(--ease-in-out);
 }
 
 .v-enter-from,
@@ -81,7 +76,7 @@ watch(
   animation: breathe 5s ease-in-out infinite;
   .point {
     margin-right: 4px;
-    transition: all 0.3s;
+    transition: all var(--duration-300) var(--ease-out);
     &.hidden {
       opacity: 0.2;
     }

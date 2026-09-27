@@ -1,14 +1,7 @@
 <template>
   <div class="cloud">
     <div class="data">
-      <n-button
-        class="up"
-        type="primary"
-        strong
-        secondary
-        round
-        @click="upSongRef.click()"
-      >
+      <n-button class="up" type="primary" strong secondary round @click="upSongRef.click()">
         <template #icon>
           <n-icon :component="BackupRound" />
         </template>
@@ -45,7 +38,15 @@
         <span>{{ cloudSpace[1] }} G</span>
       </div>
     </div>
-    <DataLists :listData="cloudData" />
+    <div class="song-panel">
+      <DataLists
+        :listData="cloudData"
+        virtual
+        virtual-height="min(68vh, 760px)"
+        :virtual-item-size="54"
+        :virtual-threshold="40"
+      />
+    </div>
     <Pagination
       :totalCount="totalCount"
       :pageNumber="pageNumber"
@@ -85,39 +86,40 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { getCloud, upCloudSong } from "@/api/user";
-import { useRouter } from "vue-router";
+import { useRoute } from "vue-router";
+import { useLayerNavigation } from "@/utils/navigation";
 import { settingStore } from "@/store";
+import { asRawEntry } from "@/utils/rawEntry";
 import { getSongTime } from "@/utils/timeTools";
 import { BackupRound } from "@vicons/material";
 import { useI18n } from "vue-i18n";
 import DataLists from "@/components/DataList/DataLists.vue";
 import Pagination from "@/components/Pagination/index.vue";
+import type { ProgressStatus } from "naive-ui";
 
 const { t } = useI18n();
-const router = useRouter();
+const route = useRoute();
+const navigation = useLayerNavigation();
 const setting = settingStore();
 
 // 云盘数据
 const cloudSpace = ref([]);
 const cloudData = ref([]);
 const pagelimit = ref(30);
-const pageNumber = ref(
-  router.currentRoute.value.query.page
-    ? Number(router.currentRoute.value.query.page)
-    : 1
-);
+const pageNumber = ref(route.query.page ? Number(route.query.page) : 1);
 const totalCount = ref(0);
 
 // 上传歌曲数据
 const upSongRef = ref(null);
-const upSongType = ref("success");
+const upSongType = ref<ProgressStatus>("success");
 const upSongModal = ref(false);
 const upSongCompleted = ref(0);
 
 // 获取云盘数据
 const getCloudData = (limit = 30, offset = 0, scroll = true) => {
+  if (scroll && typeof $scrollToTop !== "undefined") $scrollToTop();
   getCloud(limit, offset).then((res) => {
     console.log(res);
     totalCount.value = res.count;
@@ -130,22 +132,22 @@ const getCloudData = (limit = 30, offset = 0, scroll = true) => {
     // 全部歌曲
     if (res.data) {
       res.data.forEach((v, i) => {
-        cloudData.value.push({
-          id: v.songId,
-          num: i + 1 + (pageNumber.value - 1) * pagelimit.value,
-          name: v.simpleSong.name,
-          artist: v.simpleSong.ar,
-          album: v.simpleSong.al,
-          alia: v.simpleSong.alia,
-          mv: v.simpleSong.mv,
-          time: getSongTime(v.simpleSong.dt),
-        });
+        cloudData.value.push(
+          asRawEntry({
+            id: v.songId,
+            num: i + 1 + (pageNumber.value - 1) * pagelimit.value,
+            name: v.simpleSong.name,
+            artist: v.simpleSong.ar,
+            album: v.simpleSong.al,
+            alia: v.simpleSong.alia,
+            mv: v.simpleSong.mv,
+            time: getSongTime(v.simpleSong.dt),
+          }),
+        );
       });
     } else {
       $message.error(t("general.message.acquisitionFailed"));
     }
-    // 请求后回顶
-    if (typeof $scrollToTop !== "undefined") $scrollToTop();
   });
 };
 
@@ -174,7 +176,7 @@ const upCloudSongData = (e) => {
         $message.success(
           t("general.message.upCloudSuccess", {
             name: res.privateCloud.simpleSong?.name,
-          })
+          }),
         );
         getCloudData(pagelimit.value, (pageNumber.value - 1) * pagelimit.value);
       } else {
@@ -213,7 +215,7 @@ const pageSizeChange = (val) => {
 
 // 当前页数数据变化
 const pageNumberChange = (val) => {
-  router.push({
+  navigation.replacePage({
     path: "/user/cloud",
     query: {
       page: val,
@@ -223,23 +225,20 @@ const pageNumberChange = (val) => {
 
 // 当前页数据重载
 const cloudDataLoad = (scroll = false) => {
-  getCloudData(
-    pagelimit.value,
-    (pageNumber.value - 1) * pagelimit.value,
-    scroll
-  );
+  getCloudData(pagelimit.value, (pageNumber.value - 1) * pagelimit.value, scroll);
 };
 provide("cloudDataLoad", cloudDataLoad);
 
 // 监听路由参数变化
 watch(
-  () => router.currentRoute.value,
-  (val) => {
-    pageNumber.value = Number(val.query.page ? val.query.page : 1);
-    if (val.name == "user-cloud") {
+  () => route.fullPath,
+  () => {
+    const val = route;
+    if (val.name === "user-cloud") {
+      pageNumber.value = Number(val.query.page ? val.query.page : 1);
       getCloudData(pagelimit.value, (pageNumber.value - 1) * pagelimit.value);
     }
-  }
+  },
 );
 
 onMounted(() => {
@@ -266,6 +265,118 @@ onMounted(() => {
       }
       .progress {
         margin: 0 8px;
+      }
+    }
+  }
+
+  .song-panel {
+    --detail-song-list-radius: var(--radius-md);
+
+    width: 100%;
+    min-width: 0;
+
+    :deep(.datalists .songs) {
+      --n-color: transparent;
+      --n-border-color: transparent;
+
+      margin-bottom: 0;
+      border: 0;
+      border-radius: 0;
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    :deep(.datalists .songs:nth-child(odd)),
+    :deep(.datalists .songs.song-row-odd) {
+      background-color: color-mix(in srgb, var(--n-text-color) 3%, transparent);
+    }
+
+    :deep(.datalists .songs:nth-child(even)),
+    :deep(.datalists .songs.song-row-even) {
+      background-color: color-mix(in srgb, var(--n-text-color) 6%, transparent);
+    }
+
+    :deep(.datalists .songs.song-row-first) {
+      border-radius: var(--detail-song-list-radius) var(--detail-song-list-radius) 0 0;
+    }
+
+    :deep(.datalists .songs.song-row-last) {
+      border-radius: 0 0 var(--detail-song-list-radius) var(--detail-song-list-radius);
+    }
+
+    :deep(.datalists .songs.song-row-single) {
+      border-radius: var(--detail-song-list-radius);
+    }
+
+    :deep(.datalists .songs:hover) {
+      background-color: color-mix(in srgb, var(--n-text-color) 10%, transparent);
+      box-shadow: none;
+    }
+
+    :deep(.datalists .songs.play) {
+      background-color: color-mix(in srgb, var(--main-color) 13%, transparent);
+    }
+
+    :deep(.datalists .songs .n-card__content) {
+      min-height: 52px;
+      padding: 8px 12px !important;
+    }
+
+    :deep(.datalists .songs .pic),
+    :deep(.datalists .songs .num) {
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      margin-right: 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+
+    :deep(.datalists .songs .name .title) {
+      font-size: 14px;
+    }
+
+    :deep(.datalists .songs .name .meta) {
+      font-size: 12px;
+    }
+
+    :deep(.datalists .songs .album) {
+      font-size: 13px;
+      opacity: 0.72;
+    }
+
+    :deep(.datalists .songs .time) {
+      font-size: 12px;
+      opacity: 0.64;
+    }
+
+    :deep(.datalists .songs .action) {
+      width: 76px;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .song-panel {
+      :deep(.datalists .songs .n-card__content) {
+        min-height: 58px;
+        padding: 9px 6px !important;
+      }
+
+      :deep(.datalists .songs .pic),
+      :deep(.datalists .songs .num) {
+        width: 42px;
+        height: 42px;
+        min-width: 42px;
+        margin-right: 11px;
+      }
+
+      :deep(.datalists .songs .name) {
+        padding-right: 8px;
+      }
+
+      :deep(.datalists .songs .album),
+      :deep(.datalists .songs .time) {
+        display: none;
       }
     }
   }

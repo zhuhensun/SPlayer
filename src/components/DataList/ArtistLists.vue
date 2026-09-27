@@ -9,19 +9,26 @@
         :collapsed="gridCollapsed"
         :collapsed-rows="gridCollapsedRows"
         v-if="listData[0]"
+        key="data"
       >
         <n-gi
           class="item"
           v-for="item in listData"
-          :key="item"
-          @click="router.push(`/artist/songs?id=${item.id}&page=1`)"
+          :key="item.id"
+          role="link"
+          tabindex="0"
+          :data-navigation-identity="`artist:${item.id}`"
+          @click="openArtist(item, $event)"
+          @keydown.enter="openArtist(item, $event)"
           @contextmenu="openRightMenu($event, item)"
         >
-          <div class="cover">
+          <div class="cover" data-navigation-cover>
             <n-avatar
               lazy
-              round
+              :intersection-observer-options="avatarIntersectionOptions"
               class="coverImg"
+              object-fit="cover"
+              :img-props="{ 'data-navigation-shared-image': '' }"
               :src="item.cover.replace(/^http:/, 'https:') + '?param=200y200'"
               fallback-src="/images/pic/default.png"
             >
@@ -30,9 +37,13 @@
                   <n-spin size="small" />
                 </div>
               </template>
+              <template #fallback>
+                <img data-navigation-shared-image src="/images/pic/default.png" alt="" />
+              </template>
             </n-avatar>
             <n-avatar
               lazy
+              :intersection-observer-options="avatarIntersectionOptions"
               round
               class="shadow"
               :src="item.cover.replace(/^http:/, 'https:') + '?param=200y200'"
@@ -40,7 +51,7 @@
             />
             <n-icon size="40" :component="PeopleSearchOne" />
           </div>
-          <n-text class="name text-hidden">{{ item.name }}</n-text>
+          <n-text class="name text-hidden" data-navigation-title>{{ item.name }}</n-text>
           <n-text class="size" :depth="3" v-if="item.size">
             {{
               $t("general.name.songSize", {
@@ -50,8 +61,10 @@
           </n-text>
         </n-gi>
       </n-grid>
+      <n-empty v-else-if="loading === false" key="empty" class="empty" />
       <n-grid
         v-else
+        key="loading"
         class="loading"
         x-gap="20"
         y-gap="26"
@@ -68,7 +81,7 @@
     </Transition>
     <!-- 右键菜单 -->
     <n-dropdown
-      style="--n-font-size: 14px; --n-border-radius: 6px"
+      style="--n-font-size: 14px; --n-border-radius: var(--radius-sm)"
       placement="bottom-start"
       trigger="manual"
       size="large"
@@ -86,14 +99,22 @@
 import { NIcon } from "naive-ui";
 import { PeopleSearchOne, LinkTwo, Like, Unlike } from "@icon-park/vue-next";
 import { likeArtist } from "@/api/artist";
-import { useRouter } from "vue-router";
+import { useLayerNavigation } from "@/utils/navigation";
 import { userStore, settingStore } from "@/store";
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
 const user = userStore();
 const setting = settingStore();
-const router = useRouter();
+const navigation = useLayerNavigation();
+// NAvatar's observer path enables its error fallback when lazy loading is used.
+const avatarIntersectionOptions = {};
+const openArtist = (item, origin) =>
+  navigation.openPage(`/artist/songs?id=${item.id}&page=1`, {
+    origin,
+    kind: "cover",
+    identity: `artist:${item.id}`,
+  });
 const props = defineProps({
   // 列表数据
   listData: {
@@ -115,6 +136,11 @@ const props = defineProps({
     type: Number,
     default: 6,
   },
+  // 加载状态（null=旧行为，false=加载完成可显示空状态）
+  loading: {
+    type: Boolean,
+    default: null,
+  },
 });
 
 // 弹窗数据
@@ -131,7 +157,7 @@ const renderIcon = (icon) => {
       { style: { transform: "translateX(2px)" } },
       {
         default: () => icon,
-      }
+      },
     );
   };
 };
@@ -166,9 +192,7 @@ const openRightMenu = (e, data) => {
           onClick: () => {
             if (navigator.clipboard) {
               try {
-                navigator.clipboard.writeText(
-                  `https://music.163.com/#/artist?id=${data.id}`
-                );
+                navigator.clipboard.writeText(`https://music.163.com/#/artist?id=${data.id}`);
                 $message.success(t("general.message.copySuccess"));
               } catch (err) {
                 console.error(t("general.message.copyFailure"), err);
@@ -200,19 +224,19 @@ const toLikeArtist = (data) => {
     if (res.code === 200) {
       $message.success(
         `${data.name + isThereASpace}${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.success") })
             : t("menu.cancelCollection", { name: t("general.dialog.success") })
-        }`
+        }`,
       );
       user.setUserArtistLists();
     } else {
       $message.error(
         `${data.name + isThereASpace}${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.failed") })
             : t("menu.cancelCollection", { name: t("general.dialog.failed") })
-        }`
+        }`,
       );
     }
   });
@@ -220,18 +244,11 @@ const toLikeArtist = (data) => {
 
 // 判断收藏还是取消
 const isLikeOrDislike = (id) => {
-  if (!user.getUserArtistLists.list[0]) {
-    return true;
-  }
-  return !user.getUserArtistLists.list.some((item) => item.id === id);
+  return !user.getUserArtistIds.has(Number(id));
 };
 
 onMounted(() => {
-  if (
-    user.userLogin &&
-    !user.getUserArtistLists.has &&
-    !user.getUserArtistLists.isLoading
-  )
+  if (user.userLogin && !user.getUserArtistLists.has && !user.getUserArtistLists.isLoading)
     user.setUserArtistLists();
 });
 </script>
@@ -241,7 +258,7 @@ onMounted(() => {
   padding-top: 20px;
   .v-enter-active,
   .v-leave-active {
-    transition: opacity 0.3s ease;
+    transition: opacity var(--duration-300) var(--ease-out);
   }
 
   .v-enter-from,
@@ -256,16 +273,22 @@ onMounted(() => {
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 4px 16px 0 #00000020;
-      border-radius: 50%;
-      transition: all 0.3s;
       .coverImg {
-        filter: brightness(1);
-        transform: scale(1);
         width: 100%;
         height: 100%;
-        transition: all 0.3s;
+        overflow: visible;
+        border-radius: 0;
+        background: transparent;
         z-index: 1;
+        :deep(img) {
+          object-fit: cover;
+          border-radius: 50%;
+          box-shadow: 0 4px 16px 0 #00000020;
+          transition:
+            transform var(--duration-300) var(--ease-out),
+            filter var(--duration-300) var(--ease-out),
+            box-shadow var(--duration-300) var(--ease-out);
+        }
         .cover-loading {
           position: relative;
           display: flex;
@@ -274,6 +297,7 @@ onMounted(() => {
           width: 100%;
           height: 0;
           padding-bottom: 100%;
+          border-radius: 50%;
           background-color: #0001;
           .n-spin-body {
             position: absolute;
@@ -296,23 +320,25 @@ onMounted(() => {
         z-index: 0;
         background-size: cover;
         aspect-ratio: 1/1;
-        transition: opacity 0.3s;
+        transition: opacity var(--duration-300) var(--ease-out);
       }
       .n-icon {
         opacity: 0;
         transform: scale(0.8);
         position: absolute;
         color: #fff;
-        transition: all 0.3s;
+        transition:
+          opacity var(--duration-300) var(--ease-out),
+          transform var(--duration-300) var(--ease-out);
         z-index: 1;
       }
       &:hover {
-        box-shadow: 0 4px 16px 0 #00000040;
         .n-icon {
           opacity: 1;
           transform: scale(1);
         }
-        .coverImg {
+        :deep(.coverImg img) {
+          box-shadow: 0 4px 16px 0 #00000040;
           filter: brightness(0.8);
           transform: scale(1.05);
         }
@@ -321,7 +347,7 @@ onMounted(() => {
         }
       }
       &:active {
-        .n-avatar {
+        :deep(.coverImg img) {
           transform: scale(1);
         }
       }
@@ -329,7 +355,7 @@ onMounted(() => {
     .name {
       margin-top: 14px;
       font-size: 16px;
-      transition: all 0.3s;
+      transition: color var(--duration-300) var(--ease-out);
       cursor: pointer;
       &:hover {
         color: var(--main-color);
@@ -344,6 +370,9 @@ onMounted(() => {
       border-radius: 50% !important;
       margin-bottom: 20px;
     }
+  }
+  .empty {
+    margin: 40px 0;
   }
 }
 </style>

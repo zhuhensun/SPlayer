@@ -1,75 +1,50 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "build": {
     "beforeBuildCommand": "pnpm run build",
     "beforeDevCommand": "pnpm run dev",
-    "devPath": "http://localhost:25536",
-    "distDir": "../dist"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:25536"
   },
-  "package": {
-    "productName": "GMPlayer",
-    "version": "0.1.1"
+  "bundle": {
+    "active": true,
+    "category": "Music",
+    "copyright": "",
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "externalBin": [],
+    "icon": [
+      "../public/images/logo/favicon.png",
+      "../public/favicon.ico"
+    ],
+    "longDescription": "",
+    "resources": [],
+    "shortDescription": ""
   },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "window": {
-        "all": false,
-        "close": true,
-        "hide": true,
-        "show": true,
-        "maximize": true,
-        "minimize": true,
-        "unmaximize": true,
-        "unminimize": true,
-        "startDragging": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "category": "DeveloperTool",
-      "copyright": "",
-      "deb": {
-        "depends": []
-      },
-      "externalBin": [],
-      "icon": [
-        "../public/images/logo/favicon.png",
-        "../public/favicon.ico"
-      ],
-      "identifier": "com.gbclstudio.gmplayer",
-      "longDescription": "",
-      "macOS": {
-        "entitlements": null,
-        "exceptionDomain": "",
-        "frameworks": [],
-        "providerShortName": null,
-        "signingIdentity": null
-      },
-      "resources": [],
-      "shortDescription": "",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": null
-    },
+  "productName": "GMPlayer",
+  "mainBinaryName": "GMPlayer",
+  "version": "0.1.1",
+  "identifier": "com.gbclstudio.gmplayer",
+  "plugins": {
+    "audio-backend": {},
     "updater": {
-      "active": false
-    },
-    "windows": [
-      {
-        "fullscreen": false,
-        "height": 800,
-        "decorations": false,
-        "resizable": true,
-        "title": "GMPlayer",
-        "width": 1200
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0ODJDNzZGMTI4NjYxQjUKUldTMVlZWVNiOGVDcERETzFZc1U2ME13dTQvRGhwZGJLbWlkc1ZTeDJ6L0M3ckwwdHpLNkUxUXIK",
+      "endpoints": [
+        "https://github.com/Burial0268/GMPlayer/releases/download/master-player-dev/latest.json"
+      ]
+    }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPCACHE/local-covers/*"
+        ]
       }
-    ]
+    }
   }
 }

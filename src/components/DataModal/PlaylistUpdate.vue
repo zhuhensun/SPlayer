@@ -14,10 +14,7 @@
       :model="playlistUpdateValue"
     >
       <n-form-item :label="$t('other.plName')" path="name">
-        <n-input
-          v-model:value="playlistUpdateValue.name"
-          :placeholder="$t('other.plNameTip')"
-        />
+        <n-input v-model:value="playlistUpdateValue.name" :placeholder="$t('other.plNameTip')" />
       </n-form-item>
       <n-form-item :label="$t('other.plDes')" path="desc">
         <n-input
@@ -55,7 +52,8 @@
 
 <script setup>
 import { playlistUpdate } from "@/api/playlist";
-import { formRules } from "@/utils/formRules";
+import { notifyPlaylistChanged } from "@/utils/playlistMutations";
+import { formRules } from "@/utils/ui/formRules";
 import { musicStore, userStore } from "@/store";
 import { useI18n } from "vue-i18n";
 
@@ -87,13 +85,16 @@ const toUpdatePlayList = (e) => {
         playlistUpdateId.value,
         playlistUpdateValue._value.name,
         playlistUpdateValue._value.desc,
-        playlistUpdateValue._value.tags.join(";")
+        playlistUpdateValue._value.tags.join(";"),
       ).then((res) => {
         console.log(res);
         if (res.code === 200) {
           $message.success(t("general.message.editorSuccess"));
           closeUpdateModal();
           user.setUserPlayLists();
+          // 侧边栏靠上面这次重拉，但正开着的歌单页拿的是自己那份 playlistDetail，
+          // 标题、简介、标签都不会跟着变 —— 改完名字回到页面还是旧的。
+          notifyPlaylistChanged({ kind: "meta", playlistId: Number(playlistUpdateId.value) });
         } else {
           $message.error(t("general.message.editorFailed"));
         }

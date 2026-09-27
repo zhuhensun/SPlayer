@@ -8,6 +8,7 @@
         cols="2 s:3 m:4 l:5"
         responsive="screen"
         v-if="listData[0]"
+        key="data"
       >
         <n-gi
           class="item"
@@ -38,16 +39,14 @@
           </div>
           <div class="title">
             <span class="name text-hidden">{{ item.name }}</span>
-            <AllArtists
-              class="text-hidden"
-              :artistsData="item.artist"
-              v-if="item.artist"
-            />
+            <AllArtists class="text-hidden" :artistsData="item.artist" v-if="item.artist" />
           </div>
         </n-gi>
       </n-grid>
+      <n-empty v-else-if="loading === false" key="empty" class="empty" />
       <n-grid
         v-else
+        key="loading"
         class="loading"
         x-gap="20"
         y-gap="26"
@@ -76,6 +75,11 @@ const props = defineProps({
     type: Array,
     default: [],
   },
+  // 加载状态（null=旧行为，false=加载完成可显示空状态）
+  loading: {
+    type: Boolean,
+    default: null,
+  },
 });
 </script>
 
@@ -83,7 +87,7 @@ const props = defineProps({
 .videolists {
   .v-enter-active,
   .v-leave-active {
-    transition: opacity 0.3s ease;
+    transition: opacity var(--duration-300) var(--ease-out);
   }
 
   .v-enter-from,
@@ -99,14 +103,14 @@ const props = defineProps({
       justify-content: center;
       position: relative;
       overflow: hidden;
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       cursor: pointer;
-      transition: all 0.3s;
+      transition: all var(--duration-300) var(--ease-out);
       .coverImg {
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         width: 100%;
         height: 100%;
-        transition: all 0.3s;
+        transition: all var(--duration-300) var(--ease-out);
       }
       .play {
         opacity: 0;
@@ -118,7 +122,7 @@ const props = defineProps({
         backdrop-filter: blur(10px);
         border-radius: 50%;
         transform: scale(0.8);
-        transition: all 0.3s;
+        transition: all var(--duration-300) var(--ease-out);
       }
       .num,
       .time {
@@ -129,14 +133,14 @@ const props = defineProps({
         -webkit-backdrop-filter: blur(4px);
         backdrop-filter: blur(4px);
         padding: 4px 8px;
-        transition: all 0.3s;
+        transition: all var(--duration-300) var(--ease-out);
       }
       .num {
         display: flex;
         align-items: center;
         top: 0;
         right: 0;
-        border-bottom-left-radius: 8px;
+        border-bottom-left-radius: var(--radius-md);
         .n-icon {
           margin-right: 4px;
         }
@@ -144,7 +148,7 @@ const props = defineProps({
       .time {
         left: 0;
         bottom: 0;
-        border-top-right-radius: 8px;
+        border-top-right-radius: var(--radius-md);
       }
       &:hover {
         box-shadow: 0 15px 30px rgb(0 0 0 / 10%);
@@ -172,7 +176,7 @@ const props = defineProps({
         // font-size: 2vh;
         font-size: 15px;
         -webkit-line-clamp: 2;
-        transition: all 0.3s;
+        transition: all var(--duration-300) var(--ease-out);
         cursor: pointer;
         &:hover {
           opacity: 1;
@@ -182,7 +186,7 @@ const props = defineProps({
       .by {
         font-size: 12px;
         opacity: 0.6;
-        transition: all 0.3s;
+        transition: all var(--duration-300) var(--ease-out);
         cursor: pointer;
         &:hover {
           opacity: 1;
@@ -198,9 +202,12 @@ const props = defineProps({
     .pic {
       height: 120px;
       width: 100%;
-      border-radius: 8px !important;
+      border-radius: var(--radius-md) !important;
       margin-bottom: 12px;
     }
+  }
+  .empty {
+    margin: 40px 0;
   }
 }
 </style>

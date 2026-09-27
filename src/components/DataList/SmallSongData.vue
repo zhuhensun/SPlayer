@@ -3,11 +3,7 @@
     <n-avatar
       class="pic"
       :size="48"
-      :src="
-        songDetail && songDetail.album
-          ? songDetail.album.picUrl.replace(/^http:/, 'https:') + '?param=60y60'
-          : '/images/pic/default.png'
-      "
+      :src="coverUrl(songDetail?.album?.picUrl, 60)"
       fallback-src="/images/pic/default.png"
     />
     <div class="name" :style="notJump ? 'pointer-events: none' : null">
@@ -29,6 +25,7 @@
 <script setup>
 import { useRouter } from "vue-router";
 import { getMusicDetail } from "@/api/song";
+import { coverUrl } from "@/utils/coverUrl";
 import { useI18n } from "vue-i18n";
 import AllArtists from "./AllArtists.vue";
 
@@ -84,13 +81,13 @@ watch(
   () => props.getDataByID,
   (val) => {
     getMusicDetailData(val);
-  }
+  },
 );
 watch(
   () => props.songData,
   (val) => {
     songDetail.value = val;
-  }
+  },
 );
 
 onMounted(() => {
@@ -106,14 +103,14 @@ onMounted(() => {
   align-items: center;
   .pic {
     margin-right: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     min-width: 48px;
   }
   .name {
     line-height: 1.6;
     .n-text {
       font-size: 18px;
-      transition: all 0.3s;
+      transition: all var(--duration-300) var(--ease-out);
       cursor: pointer;
       &:hover {
         color: var(--main-color);

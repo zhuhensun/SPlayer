@@ -4,13 +4,7 @@
       {{ $t("nav.officialList") }}
     </n-divider>
     <Transition mode="out-in">
-      <n-grid
-        class="official"
-        x-gap="20"
-        y-gap="20"
-        :cols="2"
-        v-if="toplistData.officialList[0]"
-      >
+      <n-grid class="official" x-gap="20" y-gap="20" :cols="2" v-if="toplistData.officialList[0]">
         <n-gi v-for="item in toplistData.officialList" :key="item">
           <n-card
             class="item"
@@ -21,28 +15,25 @@
               alignItems: 'center',
             }"
             hoverable
-            @click="router.push(`/playlist?id=${item.id}&page=1`)"
+            role="link"
+            tabindex="0"
+            :data-navigation-identity="`playlist:${item.id}`"
+            @click="openPlaylist(item.id, $event)"
+            @keydown.enter="openPlaylist(item.id, $event)"
           >
-            <div class="cover">
+            <div class="cover" data-navigation-cover>
               <n-avatar
                 class="coverImg"
-                :src="
-                  item.coverImgUrl.replace(/^http:/, 'https:') +
-                  '?param=300y300'
-                "
+                :src="item.coverImgUrl.replace(/^http:/, 'https:') + '?param=300y300'"
                 fallback-src="/images/pic/default.png"
               />
               <n-text class="update" v-html="item.updateFrequency" />
             </div>
             <div class="data">
-              <n-text class="title" v-html="item.name" />
+              <n-text class="title" data-navigation-title v-html="item.name" />
               <div class="desc">
-                <div
-                  class="song text-hidden"
-                  v-for="(song, index) in item.tracks"
-                  :key="song"
-                >
-                  <n-text>{{ index + 1 }}. {{ song.first }} - </n-text>
+                <div class="song text-hidden" v-for="(song, index) in item.tracks" :key="song">
+                  <n-text>{{ Number(index) + 1 }}. {{ song.first }} - </n-text>
                   <n-text depth="3">{{ song.second }}</n-text>
                 </div>
               </div>
@@ -56,15 +47,21 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { getToplist } from "@/api/album";
-import { useRouter } from "vue-router";
+import { useLayerNavigation } from "@/utils/navigation";
 import { formatNumber } from "@/utils/timeTools";
 import { useI18n } from "vue-i18n";
 import CoverLists from "@/components/DataList/CoverLists.vue";
 
 const { t } = useI18n();
-const router = useRouter();
+const navigation = useLayerNavigation();
+const openPlaylist = (id: number, origin: Event) =>
+  navigation.openPage(`/playlist?id=${id}&page=1`, {
+    origin,
+    kind: "card",
+    identity: `playlist:${id}`,
+  });
 
 // 排行榜数据
 const toplistData = reactive({
@@ -77,14 +74,14 @@ const toplistData = reactive({
 // 获取排行榜数据
 const getToplistData = () => {
   getToplist().then((res) => {
-    toplistData.officialList = [];
-    toplistData.globalList = [];
     if (res.list[0]) {
-      res.list.forEach((v) => {
+      const official: any[] = [];
+      const global: any[] = [];
+      res.list.forEach((v: any) => {
         if (v.ToplistType) {
-          toplistData.officialList.push(v);
+          official.push(v);
         } else {
-          toplistData.globalList.push({
+          global.push({
             id: v.id,
             cover: v.coverImgUrl,
             name: v.name,
@@ -93,7 +90,8 @@ const getToplistData = () => {
           });
         }
       });
-      console.log(toplistData);
+      toplistData.officialList = official;
+      toplistData.globalList = global;
     } else {
       $message.error(t("general.message.acquisitionFailed"));
     }
@@ -110,7 +108,7 @@ onMounted(() => {
 .toplists {
   .v-enter-active,
   .v-leave-active {
-    transition: opacity 0.3s ease;
+    transition: opacity var(--duration-300) var(--ease-out);
   }
 
   .v-enter-from,
@@ -136,8 +134,8 @@ onMounted(() => {
       }
     }
     .item {
-      border-radius: 8px;
-      transition: all 0.3s;
+      border-radius: var(--radius-md);
+      transition: all var(--duration-300) var(--ease-out);
       overflow: hidden;
       cursor: pointer;
       &:active {
@@ -153,7 +151,7 @@ onMounted(() => {
           width: 160px;
           height: 160px;
           min-width: 160px;
-          border-radius: 8px;
+          border-radius: var(--radius-md);
         }
         .update {
           position: absolute;
@@ -165,7 +163,7 @@ onMounted(() => {
           -webkit-backdrop-filter: blur(40px);
           backdrop-filter: blur(40px);
           padding: 4px 8px;
-          border-radius: 8px 0 8px 0;
+          border-radius: var(--radius-md) 0 var(--radius-md) 0;
         }
       }
       .data {

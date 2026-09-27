@@ -1,323 +1,145 @@
 <template>
-  <n-drawer class="playlist-drawer" v-model:show="playListShow" :z-index="1" :width="400" :trap-focus="false"
-    :block-scroll="false" :style="{
-      '--cover-main-color': `rgb(${site.songPicColor})` || '#efefef',
-      '--cover-second-color': `rgba(${site.songPicColor}, 0.14)` || '#efefef14',
-    }" placement="right" to="#mainContent" @after-leave="music.showPlayList = false"
-    @mask-click="music.showPlayList = false">
-    <n-drawer-content :native-scrollbar="false" closable>
+  <n-drawer
+    v-if="useDrawerLayout"
+    class="playlist-drawer"
+    :show="playListShow"
+    :z-index="2200"
+    :width="400"
+    :show-mask="false"
+    :trap-focus="false"
+    :block-scroll="false"
+    placement="right"
+    to="body"
+    @update:show="handleDrawerShowUpdate"
+  >
+    <n-drawer-content
+      class="playlist-drawer-content"
+      :native-scrollbar="true"
+      :body-content-style="{ padding: 0, height: '100%' }"
+      closable
+    >
       <template #header>
-        <div class="text">
-          <n-text class="name">{{ $t("general.name.playlists") }}</n-text>
-          <n-text class="num" :depth="3" v-if="music.getPlaylists.length > 0">
-            {{
-              $t("general.name.songSize", { size: music.getPlaylists.length })
-            }}
-          </n-text>
-        </div>
+        <n-text class="playlist-title">{{ $t("general.name.playlists") }}</n-text>
       </template>
-      <Transition mode="out-in">
-        <div v-if="music.getPlaylists[0]">
-          <n-card hoverable :class="index === music.persistData.playSongIndex ? 'songs play' : 'songs'
-            " :id="'playlist' + index" :content-style="{
-              padding: '8px',
-              display: 'flex',
-              flexDirection: 'row',
-              alignItems: 'center',
-            }" v-for="(item, index) in music.getPlaylists" :key="item" @click="changeIndex(index)">
-            <div class="left">
-              <n-text v-if="index !== music.persistData.playSongIndex" :depth="3" class="num">
-                {{ index + 1 }}
-              </n-text>
-              <div v-else class="bar">
-                <div v-for="item in 3" :key="item" class="line" :style="{
-                  animationDelay: `0.${item * item}s`,
-                  animationPlayState: music.getPlayState
-                    ? 'running'
-                    : 'paused',
-                  height: `${Math.floor(Math.random() * 7) + 10}px`,
-                }" />
-              </div>
-            </div>
-            <div class="right">
-              <div class="name text-hidden">{{ item.name }}</div>
-              <AllArtists class="text-hidden" :artistsData="item.artist" />
-              <n-icon class="remove" size="18" :component="DeleteFour" @click.stop="music.removeSong(index)" />
-            </div>
-          </n-card>
-        </div>
-        <n-text v-else>{{ $t("other.playlistEmpty") }}</n-text>
-      </Transition>
+      <QueuePanel ref="queuePanelRef" />
     </n-drawer-content>
   </n-drawer>
+  <PlayListSheet v-else-if="useSheetLayout" />
 </template>
 
 <script setup>
-import { musicStore, siteStore } from "@/store";
-import { DeleteFour } from "@icon-park/vue-next";
-import { soundStop } from "@/utils/Player";
-import { useI18n } from "vue-i18n";
-import AllArtists from "@/components/DataList/AllArtists.vue";
+/**
+ * 播放队列的浮层宿主：按外壳形态挑一种呈现，两者互斥。
+ *
+ * - 769–1040px：右侧 n-drawer。仍是桌面外壳（有 Sidebar、没有 TabBar），且刻意不带
+ *   遮罩、不锁滚动 —— 队列在旁边开着，主内容照样能用。
+ * - ≤768px：`PlayListSheet` 底部抽屉。移动外壳下右侧抽屉是桌面习惯：整屏从右侧推入、
+ *   只能靠右上角那颗 × 关闭，而那颗 × 在无刘海留白的全高面板里正好压在状态栏下面。
+ * - ≥1041px 由 App.vue 的内联队列列接管，这里什么都不渲染。
+ */
+import { musicStore } from "@/store";
+import { useLayerNavigation } from "@/utils/navigation";
+import { PLAYLIST_DRAWER_MEDIA_QUERY, PLAYLIST_SHEET_MEDIA_QUERY } from "@/utils/playlistLayout";
+import QueuePanel from "@/components/QueuePanel/index.vue";
+import PlayListSheet from "@/components/DataModal/PlayListSheet.vue";
 
-const { t } = useI18n();
 const music = musicStore();
-const site = siteStore()
+const navigation = useLayerNavigation();
 
 // 播放列表显隐
+const useDrawerLayout = ref(false);
+const useSheetLayout = ref(false);
+let drawerMediaQuery = null;
+let sheetMediaQuery = null;
 const playListShow = ref(false);
+const queuePanelRef = ref(null);
 
-// 改变播放索引
-const changeIndex = (index) => {
-  try {
-    if (music.persistData.playSongIndex !== index) {
-      if (typeof $player !== "undefined") soundStop($player);
-      music.persistData.playSongIndex = index;
-      music.isLoadingSong = true;
-      music.setPlayState(true);
-    }
-  } catch (err) {
-    console.error(t("general.message.operationFailed"), err);
-    $message.error(t("general.message.operationFailed"));
+const handleDrawerShowUpdate = (show) => {
+  if (!show) {
+    navigation.closeQueue();
+    return;
+  }
+  if (useDrawerLayout.value && music.showPlayList) {
+    playListShow.value = true;
   }
 };
 
-// 监听播放列表显隐
-const timeOut = ref(null);
+// 打开时滚动到当前播放曲目
+const scrollToCurrentSong = () => {
+  nextTick().then(() => {
+    if (playListShow.value) queuePanelRef.value?.scrollToCurrent();
+  });
+};
+
+const syncDrawerLayout = (event) => {
+  useDrawerLayout.value = event?.matches ?? drawerMediaQuery?.matches ?? true;
+};
+
+const syncSheetLayout = (event) => {
+  useSheetLayout.value = event?.matches ?? sheetMediaQuery?.matches ?? false;
+};
+
 watch(
   () => music.showPlayList,
-  (val) => {
-    playListShow.value = val;
-    nextTick().then(() => {
-      if (val && music.getPlaylists[0]) {
-        const el = document.getElementById(
-          `playlist${music.persistData.playSongIndex}`
-        );
-        if (el) {
-          timeOut.value = setTimeout(() => {
-            el.scrollIntoView({
-              behavior: "smooth",
-              block: "center",
-            });
-          }, 500);
-        }
-      } else {
-        clearTimeout(timeOut.value);
-      }
-    });
-  }
+  (show) => {
+    if (useDrawerLayout.value) {
+      playListShow.value = show;
+    } else {
+      playListShow.value = false;
+    }
+    scrollToCurrentSong();
+  },
+);
+
+watch(
+  () => useDrawerLayout.value,
+  (isDrawerLayout) => {
+    playListShow.value = isDrawerLayout ? music.showPlayList : false;
+    scrollToCurrentSong();
+  },
 );
 
 onMounted(() => {
-  playListShow.value = music.showPlayList;
+  if (typeof window !== "undefined") {
+    drawerMediaQuery = window.matchMedia(PLAYLIST_DRAWER_MEDIA_QUERY);
+    sheetMediaQuery = window.matchMedia(PLAYLIST_SHEET_MEDIA_QUERY);
+    syncDrawerLayout();
+    syncSheetLayout();
+    drawerMediaQuery.addEventListener("change", syncDrawerLayout);
+    sheetMediaQuery.addEventListener("change", syncSheetLayout);
+  } else {
+    useDrawerLayout.value = true;
+  }
 });
 
 onBeforeUnmount(() => {
-  clearTimeout(timeOut.value);
+  drawerMediaQuery?.removeEventListener("change", syncDrawerLayout);
+  sheetMediaQuery?.removeEventListener("change", syncSheetLayout);
 });
 </script>
 
 <style lang="scss">
-.n-drawer-mask {
-  backdrop-filter: blur(20px);
-}
-
 .playlist-drawer {
   width: 400px !important;
   border-radius: 0;
-  transition: width 0.3s;
+  transition: width var(--duration-300) var(--ease-out);
 
   .n-drawer-header {
-    height: 70px;
+    height: 60px;
     box-sizing: border-box;
   }
 
-  .n-scrollbar-content {
-    padding: 16px !important;
+  // QueuePanel 自管滚动与内边距，抽屉主体不再包滚动容器
+  .n-drawer-body-content-wrapper {
+    padding: 0 !important;
     height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-  }
-
-  &.full-player {
-    background-color: transparent;
-    box-shadow: none;
-
-    .n-drawer-header {
-      border-bottom: none;
-
-      .pl-name {
-
-        a,
-        span,
-        .n-icon {
-          color: var(--cover-main-color) !important;
-        }
-      }
-
-      .n-base-icon {
-        color: var(--cover-main-color);
-      }
-    }
-  }
-
-  @media (max-width: 700px) {
-    width: 100% !important;
-    border-radius: 0;
   }
 }
 </style>
 
 <style lang="scss" scoped>
-.playlist-drawer {
-
-  .v-enter-active,
-  .v-leave-active {
-    transition: opacity 0.3s ease;
-  }
-
-  .v-enter-from,
-  .v-leave-to {
-    opacity: 0;
-  }
-
-  .text {
-    display: flex;
-    align-items: center;
-
-    .num {
-      font-size: 14px;
-
-      &::before {
-        content: "-";
-        margin: 0 6px;
-      }
-    }
-  }
-
-  .songs {
-    border-radius: 8px;
-    cursor: pointer;
-    margin-bottom: 12px;
-    transition: all 0.3s;
-
-    &:nth-last-of-type(1) {
-      margin-bottom: 0;
-    }
-
-    &:active {
-      transform: scale(0.98);
-    }
-
-    &:hover {
-      .n-card__content {
-        .right {
-          .remove {
-            opacity: 1;
-          }
-        }
-      }
-    }
-
-    &.play {
-      background-color: var(--cover-second-color);
-      border-color: var(--cover-main-color);
-
-      a,
-      span,
-      div,
-      .n-icon {
-        color: var(--cover-main-color);
-      }
-
-      :deep(span) {
-        color: var(--cover-main-color);
-      }
-
-      .right {
-        .remove {
-          color: var(--cover-main-color);
-
-          &:hover {
-            background-color: var(--n-action-color);
-          }
-        }
-      }
-    }
-
-    .left {
-      width: 30px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-right: 12px;
-
-      .bar {
-        display: flex;
-        justify-content: space-evenly;
-        align-items: flex-end;
-        width: 20px;
-        height: 20px;
-
-        .line {
-          width: 3px;
-          height: 16px;
-          background-color: var(--cover-main-color);
-          border-radius: 4px;
-          transition: all 0.3s;
-          animation: lineMove 1s ease-in-out infinite;
-        }
-
-        @keyframes lineMove {
-          0% {
-            height: 16px;
-          }
-
-          50% {
-            height: 10px;
-          }
-
-          100% {
-            height: 16px;
-          }
-        }
-      }
-    }
-
-    .right {
-      flex: 1;
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      padding-right: 42px;
-
-      .name {
-        pointer-events: none;
-      }
-
-      .artists {
-        opacity: 0.8;
-        font-size: 13px;
-        pointer-events: none;
-      }
-
-      .remove {
-        position: absolute;
-        border-radius: 8px;
-        right: 0;
-        opacity: 0;
-        transition: all 0.3s;
-        color: #999;
-        padding: 6px;
-
-        &:hover {
-          color: var(--cover-main-color);
-          background-color: var(--n-border-color);
-        }
-      }
-    }
-  }
+.playlist-title {
+  font-size: 15px;
+  font-weight: 700;
 }
 </style>

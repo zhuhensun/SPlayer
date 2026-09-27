@@ -1,41 +1,25 @@
 <template>
-  <Transition mode="out-in">
+  <Transition mode="out-in" :css="animated">
     <n-card v-if="Object.keys(commentData).length" class="comment" hoverable>
       <div class="user">
-        <div class="avatar">
+        <div class="avatar" @click="goToUser(commentData.user.userId)">
           <img
             class="avatarImg"
-            :src="
-              commentData.user.avatarUrl.replace(/^http:/, 'https:') +
-              '?param=50y50'
-            "
+            :src="commentData.user.avatarUrl.replace(/^http:/, 'https:') + '?param=50y50'"
             alt="avatar"
           />
           <img
             class="musicPackage"
             v-if="commentData.user.vipRights?.redVipAnnualCount > 0"
-            :src="
-              commentData.user.vipRights.musicPackage.iconUrl.replace(
-                /^http:/,
-                'https:'
-              )
-            "
+            :src="commentData.user.vipRights.musicPackage.iconUrl.replace(/^http:/, 'https:')"
             alt="redVipAnnualCount"
             title="网易音乐人"
           />
         </div>
-        <div
-          class="associator"
-          v-if="commentData.user.vipRights?.redVipLevel > 0"
-        >
+        <div class="associator" v-if="commentData.user.vipRights?.redVipLevel > 0">
           <img
             v-if="commentData.user.vipRights.associator"
-            :src="
-              commentData.user.vipRights.associator.iconUrl.replace(
-                /^http:/,
-                'https:'
-              )
-            "
+            :src="commentData.user.vipRights.associator.iconUrl.replace(/^http:/, 'https:')"
             alt="associator"
             title="黑胶会员"
           />
@@ -43,11 +27,13 @@
       </div>
       <div class="review">
         <div class="content">
-          <n-text class="name">{{ commentData.user.nickname }}：</n-text>
+          <n-text class="name" @click="goToUser(commentData.user.userId)">
+            {{ commentData.user.nickname }}：
+          </n-text>
           <n-text class="text" v-html="commentData.content" />
         </div>
-        <div class="beReplied" v-if="commentData.beReplied[0]">
-          <n-text class="name">
+        <div class="beReplied" v-if="commentData.beReplied?.[0]">
+          <n-text class="name" @click="goToUser(commentData.beReplied[0].user.userId)">
             @{{ commentData.beReplied[0].user.nickname }}：
           </n-text>
           <n-text class="text">{{ commentData.beReplied[0].content }}</n-text>
@@ -63,7 +49,12 @@
           </div>
           <div
             :class="commentData.liked ? 'like liked' : 'like'"
+            role="button"
+            tabindex="0"
+            :aria-pressed="commentData.liked"
             @click="toLikeComment"
+            @keydown.enter.prevent="toLikeComment"
+            @keydown.space.prevent="toLikeComment"
           >
             <n-icon>
               <ThumbsUp :theme="commentData.liked ? 'filled' : 'outline'" />
@@ -92,19 +83,33 @@ const props = defineProps({
   // 评论 数据
   commentData: {
     type: Object,
-    default: {},
+    default: () => ({}),
+  },
+  // 评论所属资源；播放器内嵌评论不依赖当前路由参数
+  resourceId: {
+    type: [Number, String],
+    default: null,
+  },
+  // 嵌入虚拟列表时关闭逐条淡入，避免大量评论同时触发过渡。
+  animated: {
+    type: Boolean,
+    default: true,
   },
 });
+
+// 前往用户主页
+const goToUser = (userId) => {
+  if (!userId) return;
+  router.push({ path: "/profile", query: { id: userId } });
+};
 
 // 点赞评论
 const toLikeComment = () => {
   if (user.userLogin) {
+    const resourceId = Number(props.resourceId ?? router.currentRoute.value.query.id);
+    if (!Number.isFinite(resourceId)) return;
     const type = props.commentData.liked ? 0 : 1;
-    likeComment(
-      router.currentRoute.value.query.id,
-      props.commentData.commentId,
-      type
-    ).then((res) => {
+    likeComment(resourceId, props.commentData.commentId, type).then((res) => {
       if (res.code === 200) {
         props.commentData.liked = !props.commentData.liked;
         props.commentData.likedCount += type ? 1 : -1;
@@ -121,7 +126,7 @@ const toLikeComment = () => {
 <style lang="scss" scoped>
 .v-enter-active,
 .v-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity var(--duration-300) var(--ease-out);
 }
 
 .v-enter-from,
@@ -130,7 +135,7 @@ const toLikeComment = () => {
 }
 .comment {
   margin-bottom: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   :deep(.n-card__content) {
     display: flex;
     flex-direction: row;
@@ -147,6 +152,11 @@ const toLikeComment = () => {
         height: 54px;
         border-radius: 50%;
         box-shadow: 0 6px 8px -2px rgb(0 0 0 / 16%);
+        cursor: pointer;
+        transition: transform var(--duration-150) var(--ease-out);
+        &:active {
+          transform: scale(0.94);
+        }
         .avatarImg {
           border-radius: 50%;
           width: 100%;
@@ -195,7 +205,7 @@ const toLikeComment = () => {
         .name {
           font-weight: bold;
           cursor: pointer;
-          transition: all 0.3s;
+          transition: all var(--duration-300) var(--ease-out);
           &:hover {
             color: var(--main-color);
           }
@@ -204,7 +214,7 @@ const toLikeComment = () => {
       .beReplied {
         width: 100%;
         padding: 4px 8px;
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         background-color: var(--n-border-color);
         font-size: 13px;
         margin-top: 6px;
@@ -212,7 +222,7 @@ const toLikeComment = () => {
         .name {
           font-weight: bold;
           cursor: pointer;
-          transition: all 0.3s;
+          transition: all var(--duration-300) var(--ease-out);
           &:hover {
             color: var(--main-color);
           }
@@ -236,7 +246,7 @@ const toLikeComment = () => {
         .like {
           margin-left: auto;
           cursor: pointer;
-          transition: all 0.3s;
+          transition: all var(--duration-300) var(--ease-out);
           opacity: 0.6;
           &:hover {
             color: var(--main-color);
@@ -261,7 +271,7 @@ const toLikeComment = () => {
 .skeleton {
   width: 100%;
   height: 120px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   margin-bottom: 12px;
 }
 </style>

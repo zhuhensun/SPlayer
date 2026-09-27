@@ -1,0 +1,373 @@
+<template>
+  <aside class="queue-panel">
+    <section class="queue-now">
+      <div class="queue-title">{{ $t("player.queue.nowPlaying") }}</div>
+      <div v-if="currentSong" class="now-card">
+        <img class="now-cover" :src="coverUrl(currentSong.album?.picUrl, 80)" alt="cover" />
+        <div class="now-meta">
+          <div class="now-name text-hidden">{{ currentSong.name }}</div>
+          <AllArtists class="now-artists text-hidden" :artistsData="currentSong.artist" />
+        </div>
+      </div>
+      <div v-else class="queue-empty">{{ $t("other.playlistEmpty") }}</div>
+    </section>
+
+    <section class="queue-list-section">
+      <div class="queue-list-header">
+        <span>{{ $t("player.queue.playingNext") }}</span>
+        <div v-if="music.getPlaylists.length" class="queue-header-actions">
+          <span class="queue-count">
+            {{ $t("general.name.songSize", { size: music.getPlaylists.length }) }}
+          </span>
+          <button class="queue-clear" type="button" @click="music.clearPlaylists()">
+            {{ $t("player.queue.clear") }}
+          </button>
+        </div>
+      </div>
+      <n-virtual-list
+        v-if="music.getPlaylists.length"
+        ref="virtualListRef"
+        class="queue-scroll"
+        :items="queueRows"
+        :item-size="49"
+        :item-resizable="true"
+        key-field="key"
+        :show-scrollbar="false"
+      >
+        <template #default="{ item: row }">
+          <div
+            :class="[
+              'queue-row',
+              {
+                active: row.index === music.persistData.playSongIndex,
+                'queue-row-odd': row.index % 2 === 0,
+                'queue-row-even': row.index % 2 === 1,
+                'queue-row-first': row.index === 0,
+                'queue-row-last': row.index === music.getPlaylists.length - 1,
+              },
+            ]"
+            @click="changeIndex(row.index)"
+          >
+            <div class="queue-index">
+              <span v-if="row.index !== music.persistData.playSongIndex">
+                {{ row.index + 1 }}
+              </span>
+              <div v-else class="queue-bars">
+                <span v-for="bar in 3" :key="bar" :style="{ animationDelay: `${bar * 0.12}s` }" />
+              </div>
+            </div>
+            <img
+              class="queue-cover"
+              :src="coverUrl(row.item.album?.picUrl, 60)"
+              alt="cover"
+              loading="lazy"
+            />
+            <div class="queue-meta">
+              <div class="queue-name text-hidden">{{ row.item.name }}</div>
+              <AllArtists class="queue-artists text-hidden" :artistsData="row.item.artist" />
+            </div>
+            <n-icon
+              class="queue-remove"
+              :size="17"
+              :component="DeleteFour"
+              @click.stop="music.removeSong(row.index)"
+            />
+          </div>
+        </template>
+      </n-virtual-list>
+      <div v-else class="queue-empty">{{ $t("other.playlistEmpty") }}</div>
+    </section>
+  </aside>
+</template>
+
+<script setup>
+import { NIcon, NVirtualList } from "naive-ui";
+import { DeleteFour } from "@icon-park/vue-next";
+import { musicStore } from "@/store";
+import { coverUrl } from "@/utils/coverUrl";
+import AllArtists from "@/components/DataList/AllArtists.vue";
+
+const music = musicStore();
+
+const virtualListRef = ref(null);
+
+const currentSong = computed(() => music.getPlaySongData);
+const queueRows = computed(() =>
+  music.getPlaylists.map((item, index) => ({
+    item,
+    index,
+    key: `${item.id}-${index}`,
+  })),
+);
+
+const changeIndex = (index) => {
+  music.selectPlaySongByIndex(index);
+};
+
+// 滚动到当前播放曲目（供抽屉等容器在打开时调用）
+const scrollToCurrent = () => {
+  const index = music.persistData.playSongIndex;
+  if (index >= 0 && index < music.getPlaylists.length) {
+    virtualListRef.value?.scrollTo({ index });
+  }
+};
+
+defineExpose({ scrollToCurrent });
+</script>
+
+<style lang="scss" scoped>
+.queue-panel {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  // 容器可以自己提供底色。底部抽屉把它设成 transparent，因为玻璃在抽屉那一层，
+  // 这里再刷一层实色就把模糊盖掉了。
+  background-color: var(--queue-surface-bg, var(--app-shell-bg, var(--layout-bg, #fff)));
+}
+
+.queue-now {
+  padding: 16px 14px 12px;
+  border-bottom: 1px solid var(--acrylic-border, rgba(0, 0, 0, 0.06));
+}
+
+.queue-title,
+.queue-list-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--n-text-color);
+}
+
+.now-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  background-color: color-mix(in srgb, var(--n-text-color) 6%, transparent);
+}
+
+.now-cover,
+.queue-cover {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+}
+
+.now-meta,
+.queue-meta {
+  min-width: 0;
+}
+
+.now-name,
+.queue-name {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--n-text-color);
+}
+
+.now-artists,
+.queue-artists {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--n-text-color-3);
+}
+
+.queue-list-section {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.queue-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 14px 8px;
+}
+
+.queue-header-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.queue-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--n-text-color-3);
+}
+
+.queue-clear {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--n-text-color-3);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--n-text-color);
+    background-color: color-mix(in srgb, var(--n-text-color) 9%, transparent);
+    outline: none;
+  }
+}
+
+.queue-scroll {
+  min-height: 0;
+  flex: 1;
+  // 底边留量由容器给：底部抽屉贴着屏幕底边，要在这里让出 home indicator 的高度。
+  padding: 0 8px var(--queue-pad-bottom, 12px);
+  overflow-x: clip;
+  overscroll-behavior: contain;
+  contain: layout paint style;
+
+  :deep(.v-vl) {
+    overflow-x: hidden !important;
+    scrollbar-width: none;
+  }
+
+  :deep(.v-vl::-webkit-scrollbar) {
+    width: 0;
+    height: 0;
+  }
+}
+
+.queue-list {
+  padding: 0 8px 12px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: 26px 34px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 5px 6px;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--n-text-color-2);
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+
+  &:first-child,
+  &.queue-row-first {
+    border-top-left-radius: var(--radius-md);
+    border-top-right-radius: var(--radius-md);
+  }
+
+  &:last-child,
+  &.queue-row-last {
+    border-bottom-right-radius: var(--radius-md);
+    border-bottom-left-radius: var(--radius-md);
+  }
+
+  &:nth-child(odd),
+  &.queue-row-odd {
+    background-color: color-mix(in srgb, var(--n-text-color) 3%, transparent);
+  }
+
+  &:nth-child(even),
+  &.queue-row-even {
+    background-color: color-mix(in srgb, var(--n-text-color) 5%, transparent);
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--n-text-color) 9%, transparent);
+
+    .queue-remove {
+      opacity: 1;
+    }
+  }
+
+  &.active {
+    color: var(--main-color);
+    background-color: color-mix(in srgb, var(--main-color) 14%, transparent);
+
+    .queue-name,
+    .queue-artists,
+    .queue-index,
+    .queue-remove {
+      color: var(--main-color);
+    }
+  }
+}
+
+.queue-index {
+  text-align: center;
+  font-size: 11px;
+  color: var(--n-text-color-3);
+}
+
+.queue-cover {
+  width: 34px;
+  height: 34px;
+}
+
+.queue-remove {
+  justify-self: center;
+  padding: 5px;
+  border-radius: var(--radius-sm);
+  color: var(--n-text-color-3);
+  opacity: 0;
+  transition:
+    opacity 0.16s ease,
+    background-color 0.16s ease;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--n-text-color) 10%, transparent);
+  }
+}
+
+.queue-empty {
+  padding: 14px;
+  font-size: 12px;
+  color: var(--n-text-color-3);
+}
+
+.queue-bars {
+  height: 16px;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 2px;
+
+  span {
+    width: 3px;
+    height: 10px;
+    border-radius: var(--radius-pill);
+    background-color: currentColor;
+    animation: queue-bar 0.9s ease-in-out infinite;
+  }
+}
+
+@keyframes queue-bar {
+  0%,
+  100% {
+    height: 8px;
+  }
+
+  50% {
+    height: 15px;
+  }
+}
+</style>

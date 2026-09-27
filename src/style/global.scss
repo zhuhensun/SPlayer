@@ -5,17 +5,168 @@
   user-select: none;
 }
 
+/* ═══════════════════════════════════════════════
+   Reduced motion — 全局兜底
+   ═══════════════════════════════════════════════
+   此前只有首页那几张卡片各自写了 @media (prefers-reduced-motion)，
+   而动效最重的播放器（GSAP 入场、motion-v 弹簧、抽屉、沉浸模式过渡）
+   一处都没有覆盖。逐组件补是补不完的（全项目 ~298 处 transition），
+   所以在这里统一兜底，组件内只保留「必须保命」的例外。
+
+   用 0.01ms 而不是 none：transitionend / animationend 仍会触发，
+   依赖动画完成回调的逻辑不会卡死。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 例外：不确定进度指示器本身就是「还在忙」的唯一信号，
+     停掉它等于给用户看一个卡死的界面。需要保命的动画加 .motion-essential。 */
+  .motion-essential,
+  .n-spin,
+  .n-spin *,
+  .n-base-loading,
+  .n-base-loading * {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   Transition Tokens — modern, snappy, shadcn/ui style
+   ═══════════════════════════════════════════════ */
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-linear: linear;
+
+  --duration-150: 150ms;
+  --duration-200: 200ms;
+  --duration-300: 300ms;
+  --duration-400: 400ms;
+  --duration-500: 500ms;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-panel: 12px;
+  --radius-pill: 999px;
+
+  /* Elevation — 统一阴影层级，配合 --ease-out 做 hover 抬升 */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.07), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-hover: 0 12px 30px rgba(0, 0, 0, 0.14), 0 3px 8px rgba(0, 0, 0, 0.09);
+
+  /* Semantic surface tokens — shadcn/ui 式语义变量（浅色默认值，深色见 html[data-theme="dark"]） */
+  --border-color: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --hover-overlay: rgba(0, 0, 0, 0.05);
+  --active-overlay: rgba(0, 0, 0, 0.09);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--main-color, #f55e55) 24%, transparent);
+
+  /* Blur — 统一毛玻璃模糊强度 */
+  --blur-sm: 8px;
+  --blur-md: 16px;
+  --blur-lg: 24px;
+  --acrylic-blur: 18px;
+  --app-shell-bg: #f2f2f4;
+  /* naive-ui 只在 NCard / NLayout 的 embedded 变体上定义 --n-color-embedded，
+     普通节点里读它会 var() 解析失败：对 color 这类继承属性，失败等于回落成继承值。
+     播放栏正是这么用的（选中/hover 时字形要以「底板色」从强调色色块里挖出来），
+     结果字形颜色回落成继承来的 --player-accent-color，和色块同色、糊成一块实心方块。
+     在这里补一个全局兜底：naive 组件自身仍会用内联变量覆盖它，互不影响。
+     跟随 --app-shell-bg，因此深浅色主题自动生效（Provider 在运行时改写它）。 */
+  --n-color-embedded: var(--app-shell-bg);
+  --app-shell-rgb: 242, 242, 244;
+  --layout-bg: var(--app-shell-bg);
+  --content-panel-bg: #fff;
+  --content-panel-edge-shadow: rgba(0, 0, 0, 0.08);
+  --content-panel-gradient-overlay: rgba(255, 255, 255, 0.86);
+  --content-panel-hero-wash-opacity: 0.16;
+  --content-panel-mid-wash-opacity: 0.075;
+  --content-panel-side-wash-opacity: 0.045;
+  --content-panel-wash-opacity: 0.04;
+  --app-shell-top-gap: 6px;
+  --app-shell-side-gap: 8px;
+  --app-floating-control-top: calc(var(--app-shell-top-gap) + 6px);
+  --app-floating-control-inset: calc(var(--app-shell-side-gap) + 6px);
+  --app-drag-region-height: 42px;
+  --app-titlebar-width: 114px;
+  --app-titlebar-height: 30px;
+  --app-titlebar-gap: 10px;
+  /* 悬浮 TitleBar 下方的安全距离：右上角浮层（右侧抽屉头部、通知）让位用 */
+  --app-titlebar-safe-top: calc(var(--app-floating-control-top) + var(--app-titlebar-height));
+  --z-search-overlay: 2200;
+  --app-mobile-nav-height: calc(42px + var(--app-safe-area-top, 0px));
+
+  /* 底部 chrome 几何 — 单一事实来源。移动端 MiniPlayer / TabBar / 底栏玻璃 /
+     滚动容器内边距 / BackTop 全部由此派生，避免各处重复硬编码 56 与 70 后彼此漂移。
+     --app-tab-bar-height 已经含 safe-area-bottom，消费方不要再加一次。 */
+  --app-player-bar-height: 70px;
+  --app-tab-bar-height: 0px;
+  --app-bottom-chrome: 0px;
+  --app-bottom-chrome-with-player: var(--app-player-bar-height);
+
+  /* BackTop 的落点。它 teleport 到 <body>，只能读 :root。
+     注意变量名不能含数字：Naive 的 formatLength 对字符串会跑 /(\d|\.)+/ 替换，
+     名字里出现数字会被就地改写成别的值。 */
+  --app-back-top-right: 40px;
+  --app-back-top-bottom: calc(var(--app-bottom-chrome) + 40px);
+  --app-back-top-bottom-with-player: calc(var(--app-bottom-chrome-with-player) + 40px);
+
+  /* Precomposed shortcuts */
+  --transition-fast: 150ms var(--ease-out);
+  --transition-normal: 250ms var(--ease-out);
+  --transition-slow: 400ms var(--ease-out);
+  --transition-spring: 500ms var(--ease-out);
+
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* 移动端外壳始终带底部 TabBar，且要在其内部预留 home indicator / 手势条的高度。
+   BackTop 会 teleport 到 <body>，取不到 .app-layout 上的 --layout-content-bottom，
+   所以这几个量必须挂在 :root 上它才读得到。 */
+@media (max-width: 768px) {
+  :root {
+    --app-tab-bar-height: calc(56px + var(--app-safe-area-bottom, 0px));
+    --app-bottom-chrome: var(--app-tab-bar-height);
+    --app-bottom-chrome-with-player: calc(var(--app-player-bar-height) + var(--app-tab-bar-height));
+  }
+}
+
+/* 深色模式语义 token — 边框/蒙层换白色基调，阴影加深保证层级仍可读 */
+html[data-theme="dark"] {
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --hover-overlay: rgba(255, 255, 255, 0.07);
+  --active-overlay: rgba(255, 255, 255, 0.12);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.26);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-hover: 0 12px 30px rgba(0, 0, 0, 0.46), 0 3px 8px rgba(0, 0, 0, 0.32);
+}
+
 // HarmonyOS Sans
 html,
 body,
 #app {
-  -webkit-font-smoothing: antialiased;
   font-family: "HarmonyOS_Regular", sans-serif !important;
+  -webkit-font-smoothing: antialiased;
 }
 
 // Dialog
 .s-dialog {
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   .n-dialog__close {
     margin: 16px 26px 0 0;
   }
@@ -37,7 +188,7 @@ body,
   width: 60vw;
   max-width: 700px;
   min-width: min(24rem, 100vw);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   &.close {
     .n-card-header {
       .n-base-close {
@@ -78,34 +229,226 @@ body,
 
 // Dropdown
 .n-dropdown-menu {
-  border-radius: 8px !important;
+  border-radius: var(--radius-panel) !important;
 }
 
-// Tab
+// Tab — 以 Naive n-tabs 为底，融入 shadcn 质感
 .main-tab {
   .n-tabs-tab {
+    color: var(--n-text-color-3);
+    transition: color var(--duration-200) var(--ease-out);
+
+    &:hover {
+      color: var(--n-text-color-2);
+    }
+
     &.n-tabs-tab--active {
-      font-weight: bold !important;
-      transition: all 0.3s;
+      font-weight: 600 !important;
+      color: var(--main-color) !important;
+      transition: all var(--duration-200) var(--ease-in-out);
+    }
+  }
+
+  // 下划线 Tabs：Apple Music / shadcn 质感的区块导航
+  &.n-tabs--line-type {
+    .n-tabs-tab {
+      font-size: 15px;
+      letter-spacing: -0.01em;
+    }
+
+    // 主色指示条：圆润端点、轻微加粗
+    .n-tabs-bar {
+      height: 2.5px;
+      border-radius: 999px;
+      background-color: var(--main-color) !important;
+    }
+  }
+
+  // 分段控制器：Apple Music / shadcn 胶囊质感
+  &.n-tabs--segment-type {
+    .n-tabs-rail {
+      padding: 4px;
+      border-radius: var(--radius-lg);
+      background-color: color-mix(in srgb, var(--n-text-color) 6%, transparent);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--n-text-color) 5%, transparent);
+    }
+
+    // 保留 Naive 主题自适应的胶囊底色（深浅色均正确），仅精修圆角与投影
+    .n-tabs-capsule {
+      border-radius: var(--radius-sm) !important;
+      box-shadow: var(--shadow-1);
+    }
+
+    .n-tabs-tab {
+      font-size: 13.5px;
+      font-weight: 500;
+    }
+  }
+}
+
+// Home 区块标题 — Apple Music 式区头，HomeView 与 Personalized 组件共用
+.home-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 16px;
+
+  .head-title {
+    margin: 0;
+    min-width: 0;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    color: var(--n-text-color);
+  }
+
+  .head-more {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border-radius: var(--radius-pill);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--n-text-color-3);
+    cursor: pointer;
+    transition:
+      color var(--duration-200) var(--ease-out),
+      background-color var(--duration-200) var(--ease-out);
+
+    &::after {
+      content: "›";
+      margin-left: 4px;
+      font-size: 15px;
+      line-height: 1;
+      transition: transform var(--duration-200) var(--ease-out);
+    }
+
+    &:hover {
+      color: var(--n-text-color);
+      background-color: color-mix(in srgb, var(--n-text-color) 7%, transparent);
+
+      &::after {
+        transform: translateX(2px);
+      }
+    }
+  }
+}
+
+// Message — 毛玻璃浮动卡片
+.n-message-container {
+  // 桌面端：顶部居中
+  &.n-message-container--top {
+    top: 16px !important;
+  }
+  // 移动端：顶部居中，更贴近屏幕边缘
+  &.n-message-container--top-mobile {
+    top: 8px !important;
+    left: 8px !important;
+    right: 8px !important;
+    transform: none !important;
+  }
+  .n-message-wrapper {
+    margin-bottom: 8px;
+  }
+  .n-message {
+    border-radius: var(--radius-panel);
+    padding: 10px 14px;
+    font-size: 13px;
+    background: var(--message-bg, rgba(255, 255, 255, 0.72)) !important;
+    border: 1px solid var(--message-border, var(--border-color));
+    box-shadow: var(--shadow-2);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    backdrop-filter: blur(12px) saturate(180%);
+    transition:
+      transform var(--duration-400) var(--ease-out),
+      opacity var(--duration-400) var(--ease-out),
+      box-shadow var(--duration-200) var(--ease-out);
+    .n-message__icon {
+      margin-right: 8px;
+    }
+    .n-message__content {
+      font-size: 13px;
+    }
+    .n-message__close {
+      margin-left: 6px;
+    }
+  }
+}
+
+// 移动端消息样式优化
+@media (max-width: 768px) {
+  .n-message-container {
+    &.n-message-container--top,
+    &.n-message-container--top-mobile {
+      // Match the notification container: clear the status bar / notch via safe-area-top.
+      top: calc(8px + var(--app-safe-area-top, 0px)) !important;
+      left: 12px !important;
+      right: 12px !important;
+      width: auto !important;
+      transform: none !important;
+    }
+    .n-message {
+      width: 100% !important;
+      max-width: none !important;
+      justify-content: center;
+    }
+  }
+  .n-notification-container {
+    &.n-notification-container--top {
+      // Add safe-area-top so notifications clear the status bar / notch on
+      // Android/iOS notched screens (env(safe-area-inset-top) via --app-safe-area-top).
+      top: calc(8px + var(--app-safe-area-top, 0px)) !important;
+      left: 12px !important;
+      right: 12px !important;
+      width: auto !important;
+      transform: none !important;
+    }
+    .n-notification {
+      width: 100% !important;
+      max-width: none !important;
     }
   }
 }
 
 // Notification
 .n-notification {
-  border-radius: 8px !important;
+  border-radius: var(--radius-panel) !important;
+  box-shadow: var(--shadow-3);
+}
+
+// 桌面端通知位置微调
+.n-notification-container--top-right {
+  top: 16px !important;
+  right: 16px !important;
+}
+
+// Tauri 悬浮窗口控制按钮占用右上角时，右上角的 body 级浮层需要让位
+// （类由 TitleBar 悬浮变体挂载时打在 <html> 上）
+html.has-floating-titlebar {
+  .n-notification-container--top-right {
+    top: calc(var(--app-titlebar-safe-top, 42px) + 10px) !important;
+  }
+
+  .n-drawer--right-placement .n-drawer-header {
+    margin-top: var(--app-titlebar-safe-top, 42px);
+  }
 }
 
 // Nalert
 .n-alert {
-  border-radius: 8px !important;
+  border-radius: var(--radius-panel) !important;
 }
 
 // Drawer
 .n-drawer-container {
   .n-drawer {
-    border-radius: 8px 0 0 8px;
-    transition: all 0.3s;
+    border-radius: var(--radius-panel) 0 0 var(--radius-panel);
+    transition: all var(--duration-300) var(--ease-in-out);
     @media (max-width: 450px) {
       width: 100% !important;
       border-radius: 0;
@@ -134,12 +477,13 @@ body,
   display: -webkit-box !important;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+  line-clamp: 1;
   overflow: hidden;
   word-break: break-all;
 }
 
 // 响应式布局
-@mixin changeWidth($padding: 10vw) {
+@mixin changeWidth($padding: 28px) {
   .n-layout-header {
     padding: 0 $padding;
   }
@@ -156,7 +500,7 @@ body,
 
 @include changeWidth;
 
-/* 小于1200px时 */
-@media (max-width: 1200px) {
-  @include changeWidth($padding: 5vw);
+/* 小于768px时 (移动端 - 无侧边栏) */
+@media (max-width: 768px) {
+  @include changeWidth($padding: 4vw);
 }

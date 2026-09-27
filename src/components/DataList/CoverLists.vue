@@ -9,15 +9,20 @@
         :collapsed="gridCollapsed"
         :collapsed-rows="gridCollapsedRows"
         v-if="listData[0]"
+        key="data"
       >
         <n-gi
           class="item"
           v-for="item in listData"
-          :key="item"
-          @click="toLink(item.id)"
+          :key="item.id"
+          role="link"
+          tabindex="0"
+          :data-navigation-identity="`${listType}:${item.id}`"
+          @click="toLink(item.id, $event)"
+          @keydown.enter="toLink(item.id, $event)"
           @contextmenu="openRightMenu($event, item)"
         >
-          <div class="cover">
+          <div class="cover" data-navigation-cover>
             <n-image
               lazy
               class="coverImg"
@@ -31,12 +36,14 @@
                 </div>
               </template>
             </n-image>
-            <n-image
-              lazy
+            <img
               class="shadow"
-              preview-disabled
+              aria-hidden="true"
+              alt=""
+              loading="lazy"
+              decoding="async"
               :src="getCoverUrl(item.cover, 300)"
-              fallback-src="/images/pic/default.png"
+              @error="hideBrokenShadow"
             />
             <n-icon class="play" size="40">
               <PlayOne theme="filled" />
@@ -54,7 +61,7 @@
             </div>
           </div>
           <div class="title">
-            <span class="name text-hidden">{{ item.name }}</span>
+            <span class="name text-hidden" data-navigation-title>{{ item.name }}</span>
             <span v-if="listType == 'playlist' && item.artist" class="by">
               By {{ item.artist.nickname }}
             </span>
@@ -65,8 +72,10 @@
           </div>
         </n-gi>
       </n-grid>
+      <n-empty v-else-if="loading === false" key="empty" class="empty" />
       <n-grid
         v-else
+        key="loading"
         class="loading"
         x-gap="20"
         y-gap="26"
@@ -84,7 +93,7 @@
     </Transition>
     <!-- 右键菜单 -->
     <n-dropdown
-      style="--n-font-size: 14px; --n-border-radius: 6px"
+      style="--n-font-size: 14px; --n-border-radius: var(--radius-sm)"
       placement="bottom-start"
       trigger="manual"
       size="large"
@@ -102,15 +111,7 @@
 
 <script setup>
 import { NIcon } from "naive-ui";
-import {
-  PlayOne,
-  Headset,
-  LinkTwo,
-  Like,
-  Unlike,
-  Editor,
-  DeleteFour,
-} from "@icon-park/vue-next";
+import { PlayOne, Headset, LinkTwo, Like, Unlike, Editor, DeleteFour } from "@icon-park/vue-next";
 import { useI18n } from "vue-i18n";
 import { delPlayList, likePlaylist } from "@/api/playlist";
 import { likeAlbum } from "@/api/album";
@@ -118,10 +119,18 @@ import { musicStore, userStore, settingStore } from "@/store";
 import { useRouter } from "vue-router";
 import AllArtists from "./AllArtists.vue";
 import PlaylistUpdate from "@/components/DataModal/PlaylistUpdate.vue";
-import getCoverUrl from "@/utils/getCoverUrl";
+import getCoverUrl from "@/utils/ncm/getCoverUrl";
+import { useLayerNavigation } from "@/utils/navigation";
+
+// 悬停时的模糊光晕只是装饰层，用裸 <img> 而不是第二个 n-image：
+// 同一 URL 走浏览器缓存，省下的是每格多一份 n-image 组件实例与 DOM。
+const hideBrokenShadow = (e) => {
+  if (e.target instanceof HTMLElement) e.target.style.display = "none";
+};
 
 const { t } = useI18n();
 const router = useRouter();
+const navigation = useLayerNavigation();
 const music = musicStore();
 const user = userStore();
 const setting = settingStore();
@@ -156,6 +165,11 @@ const props = defineProps({
     type: Number,
     default: 30,
   },
+  // 加载状态（null=旧行为，false=加载完成可显示空状态）
+  loading: {
+    type: Boolean,
+    default: null,
+  },
 });
 const playlistUpdateRef = ref(null);
 
@@ -167,7 +181,7 @@ const renderIcon = (icon) => {
       { style: { transform: "translateX(2px)" } },
       {
         default: () => icon,
-      }
+      },
     );
   };
 };
@@ -187,8 +201,7 @@ const openRightMenu = (e, data) => {
       {
         key: "update",
         label: t("menu.update"),
-        show:
-          router.currentRoute.value.name === "user-playlists" ? true : false,
+        show: router.currentRoute.value.name === "user-playlists" ? true : false,
         props: {
           onClick: () => {
             playlistUpdateRef.value.openUpdateModal(data);
@@ -199,8 +212,7 @@ const openRightMenu = (e, data) => {
       {
         key: "del",
         label: t("menu.del"),
-        show:
-          router.currentRoute.value.name === "user-playlists" ? true : false,
+        show: router.currentRoute.value.name === "user-playlists" ? true : false,
         props: {
           onClick: () => {
             toDelPlayList(data);
@@ -233,11 +245,7 @@ const openRightMenu = (e, data) => {
           ? t("menu.collection", { name: t("general.name.album") })
           : t("menu.cancelCollection", { name: t("general.name.album") }),
         show:
-          user.userLogin &&
-          user.getUserAlbumLists.has &&
-          props.listType === "album"
-            ? true
-            : false,
+          user.userLogin && user.getUserAlbumLists.has && props.listType === "album" ? true : false,
         props: {
           onClick: () => {
             toChangeLike(data.id);
@@ -249,9 +257,7 @@ const openRightMenu = (e, data) => {
         key: "copy",
         label: t("menu.copy", {
           name:
-            props.listType === "playlist"
-              ? t("general.name.playlist")
-              : t("general.name.album"),
+            props.listType === "playlist" ? t("general.name.playlist") : t("general.name.album"),
           other: t("general.name.link"),
         }),
         props: {
@@ -261,7 +267,7 @@ const openRightMenu = (e, data) => {
                 navigator.clipboard.writeText(
                   `https://music.163.com/#/${
                     props.listType === "playlist" ? "playlist" : "album"
-                  }?id=${data.id}`
+                  }?id=${data.id}`,
                 );
                 $message.success(t("general.message.copySuccess"));
               } catch (err) {
@@ -288,22 +294,29 @@ const onClickoutside = () => {
 };
 
 // 链接跳转
-const toLink = (id) => {
+const toLink = (id, origin) => {
+  const source = { origin, kind: "cover", identity: `${props.listType}:${id}` };
   if (props.listType === "playlist" || props.listType === "topList") {
-    router.push({
-      path: "/playlist",
-      query: {
-        id,
-        page: 1,
+    navigation.openPage(
+      {
+        path: "/playlist",
+        query: {
+          id,
+          page: 1,
+        },
       },
-    });
+      source,
+    );
   } else if (props.listType === "album") {
-    router.push({
-      path: "/album",
-      query: {
-        id,
+    navigation.openPage(
+      {
+        path: "/album",
+        query: {
+          id,
+        },
       },
-    });
+      source,
+    );
   }
 };
 
@@ -335,13 +348,11 @@ const toDelPlayList = (data) => {
 // 判断收藏还是取消
 const isLikeOrDislike = (id) => {
   const listType = props.listType;
-  const playlists = user.getUserPlayLists.like;
-  const albums = user.getUserAlbumLists.list;
-  if (listType === "playlist" && playlists.length) {
-    return !playlists.some((item) => item.id === Number(id));
+  if (listType === "playlist") {
+    return !user.getLikedPlayListIds.has(Number(id));
   }
-  if (listType === "album" && albums.length) {
-    return !albums.some((item) => item.id === Number(id));
+  if (listType === "album") {
+    return !user.getUserAlbumIds.has(Number(id));
   }
   return true;
 };
@@ -351,57 +362,55 @@ const toChangeLike = async (id) => {
   const listType = props.listType;
   const type = isLikeOrDislike(id) ? 1 : 2;
   const likeFn = listType === "playlist" ? likePlaylist : likeAlbum;
-  const likeMsg =
-    listType === "playlist"
-      ? t("general.name.playlist")
-      : t("general.name.album");
+  const likeMsg = listType === "playlist" ? t("general.name.playlist") : t("general.name.album");
   const isThereASpace = setting.language === "zh-CN" ? "" : " ";
   try {
-    const res = await likeFn(type, id);
+    // 两个接口都是 (id, t)。这里原先写成 likeFn(type, id)，参数反了：
+    // 请求发出去的是 id=1|2、t=歌单号，收藏/取消收藏从未真正生效过。
+    const res = await likeFn(id, type);
     if (res.code === 200) {
       $message.success(
         `${likeMsg + isThereASpace}${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.success") })
             : t("menu.cancelCollection", { name: t("general.dialog.success") })
-        }`
+        }`,
       );
-      listType === "playlist"
-        ? user.setUserPlayLists()
-        : user.setUserAlbumLists();
+      if (listType === "playlist") {
+        user.setUserPlayLists();
+      } else {
+        user.setUserAlbumLists();
+      }
     } else {
       $message.error(
         `${likeMsg + isThereASpace}${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.failed") })
             : t("menu.cancelCollection", { name: t("general.dialog.failed") })
-        }`
+        }`,
       );
     }
   } catch (err) {
     $message.error(
       `${likeMsg + isThereASpace}${
-        type == 1
-          ? t("menu.collection", { name: t("general.dialog.failed") })
-          : t("menu.cancelCollection", { name: t("general.dialog.failed") })
-      }`
-    );
-    console.error(
-      `${likeMsg + isThereASpace}${
-        type == 1
+        type === 1
           ? t("menu.collection", { name: t("general.dialog.failed") })
           : t("menu.cancelCollection", { name: t("general.dialog.failed") })
       }`,
-      err
+    );
+    console.error(
+      `${likeMsg + isThereASpace}${
+        type === 1
+          ? t("menu.collection", { name: t("general.dialog.failed") })
+          : t("menu.cancelCollection", { name: t("general.dialog.failed") })
+      }`,
+      err,
     );
   }
 };
 
 onMounted(() => {
-  if (
-    router.currentRoute.value.name === "user-playlists" &&
-    !music.catList.sub
-  ) {
+  if (router.currentRoute.value.name === "user-playlists" && !music.catList.sub) {
     music.setCatList();
   }
   if (
@@ -427,7 +436,7 @@ onMounted(() => {
 .coverlists {
   .v-enter-active,
   .v-leave-active {
-    transition: opacity 0.3s ease;
+    transition: opacity var(--duration-200) var(--ease-in-out);
   }
 
   .v-enter-from,
@@ -442,21 +451,22 @@ onMounted(() => {
       align-items: center;
       justify-content: center;
       position: relative;
-      // overflow: hidden;
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       cursor: pointer;
-      transition: all 0.3s;
-      position: relative;
+      transition:
+        transform var(--duration-200) var(--ease-out),
+        box-shadow var(--duration-200) var(--ease-out);
       .coverImg {
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         width: 100%;
         height: 100%;
         overflow: hidden;
-        transition: filter 0.3s;
+        filter: brightness(1);
+        transition: filter var(--duration-200) var(--ease-out);
         z-index: 1;
         :deep(img) {
           width: 100%;
-          transition: transform 0.3s;
+          transition: transform var(--duration-300) var(--ease-out);
         }
         .cover-loading {
           position: relative;
@@ -483,24 +493,26 @@ onMounted(() => {
         top: 12px;
         height: 100%;
         width: 100%;
-        filter: blur(16px) opacity(0.6);
+        filter: blur(20px) opacity(0.5);
         transform: scale(0.92, 0.96);
         z-index: 0;
-        background-size: cover;
+        object-fit: cover;
         aspect-ratio: 1/1;
-        transition: opacity 0.3s;
+        transition: opacity var(--duration-200) var(--ease-out);
       }
       .play {
         opacity: 0;
         position: absolute;
         color: #fff;
         padding: 0.5vw;
-        background-color: #00000010;
+        background-color: rgb(0 0 0 / 0.06);
         -webkit-backdrop-filter: blur(10px);
         backdrop-filter: blur(10px);
         border-radius: 50%;
         transform: scale(0.8);
-        transition: all 0.3s;
+        transition:
+          transform var(--duration-150) var(--ease-out),
+          opacity var(--duration-150) var(--ease-out);
         z-index: 1;
       }
       .description {
@@ -508,14 +520,16 @@ onMounted(() => {
         right: 0;
         bottom: 0;
         color: #fff;
-        background-color: #00000030;
+        background-color: rgb(0 0 0 / 0.18);
         font-size: 12px;
         -webkit-backdrop-filter: blur(4px);
         backdrop-filter: blur(4px);
         padding: 6px;
-        border-top-left-radius: 8px;
-        border-bottom-right-radius: 8px;
-        transition: all 0.3s;
+        border-top-left-radius: var(--radius-md);
+        border-bottom-right-radius: var(--radius-md);
+        transition:
+          opacity var(--duration-150) var(--ease-in-out),
+          transform var(--duration-150) var(--ease-in-out);
         z-index: 1;
         .num {
           display: flex;
@@ -530,10 +544,12 @@ onMounted(() => {
         }
       }
       &:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-3);
         .coverImg {
-          filter: brightness(0.8);
+          filter: brightness(0.72);
           :deep(img) {
-            transform: scale(1.1);
+            transform: scale(1.08);
           }
         }
         .play {
@@ -542,13 +558,17 @@ onMounted(() => {
         }
         .description {
           opacity: 0;
+          transform: translateY(4px);
         }
         .shadow {
           opacity: 1;
         }
       }
       &:active {
-        transform: scale(0.98);
+        transform: translateY(0) scale(0.98);
+        transition:
+          transform var(--duration-150) var(--ease-out),
+          box-shadow var(--duration-150) var(--ease-out);
       }
     }
     .title {
@@ -559,7 +579,7 @@ onMounted(() => {
         // font-size: 2vh;
         font-size: 15px;
         -webkit-line-clamp: 2;
-        transition: all 0.3s;
+        transition: color var(--duration-150) var(--ease-out);
         cursor: pointer;
         &:hover {
           opacity: 1;
@@ -569,7 +589,7 @@ onMounted(() => {
       .by {
         font-size: 12px;
         opacity: 0.6;
-        transition: all 0.3s;
+        transition: color var(--duration-150) var(--ease-out);
         cursor: pointer;
         &:hover {
           opacity: 1;
@@ -586,9 +606,12 @@ onMounted(() => {
       padding-bottom: 100%;
       width: 100%;
       height: 0;
-      border-radius: 8px !important;
+      border-radius: var(--radius-md) !important;
       margin-bottom: 12px;
     }
+  }
+  .empty {
+    margin: 40px 0;
   }
   @media (max-width: 450px) {
     :deep(.n-grid) {

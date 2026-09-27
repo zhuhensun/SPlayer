@@ -1,0 +1,491 @@
+//! Track loading and natural playback progression: source resolution
+//! (download/local reuse), decoder spawning, prebuffer-gated output resume,
+//! and the decoder-finished → gapless-advance hop.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tracing::warn;
+
+use crate::analysis::AnalysisCommand;
+use crate::decoder;
+use crate::error::AudioResult;
+use crate::types::{
+    AudioInfo, AudioQuality, AudioThreadEvent, AudioThreadEventMessage, AudioThreadMessage,
+    DisplayAudioInfo, SongData,
+};
+
+use super::mixer::DeckId;
+use super::platform::{
+    seek_prebuffer_samples, start_prebuffer_samples, SEEK_PREBUFFER_WAIT_MS,
+    START_PREBUFFER_WAIT_MS,
+};
+use super::{AudioPlayer, PlaybackIntent};
+
+impl AudioPlayer {
+    pub(super) async fn handle_decoder_finished(&mut self, playback_id: u64) {
+        if self.native_crossfade_active
+            && (playback_id == self.decoder_playback_id
+                || Some(playback_id) == self.secondary_playback_id)
+        {
+            return;
+        }
+
+        if playback_id != self.decoder_playback_id || self.current_song.is_none() {
+            return;
+        }
+
+        let finished_id = self
+            .current_song
+            .as_ref()
+            .map(|s| s.get_id())
+            .unwrap_or_default();
+        self.current_decoder_handle = None;
+        // The track is over: its timeline retires with it, so the anchor below
+        // (and any heartbeat behind it) is not offered to a subscriber still
+        // holding the finished track's clock.
+        self.begin_timeline();
+        self.publish_position_anchor(false, 0.0).await;
+        self.current_song = None;
+        self.pending_display = super::now_playing::PendingDisplay::default();
+        // Between tracks: a frontend booting right now must not adopt the track
+        // that just retired. A successful advance restores the snapshot through
+        // `start_playing_song` → `sync_ui`.
+        self.clear_session_track();
+        let _ = self
+            .emitter()
+            .emit(AudioThreadEvent::AudioPlayFinished {
+                music_id: finished_id,
+            })
+            .await;
+
+        // The manifest planner owns advancement whenever it has a list: it can
+        // reach any track in the playlist and re-resolve expired URLs, neither
+        // of which the bounded queue can do once the JS runtime is frozen.
+        // Only fall back to the legacy queue hop when it declines.
+        if self.planner_can_advance() && self.advance_via_planner().await {
+            return;
+        }
+
+        if !self.playlist.is_empty() {
+            let _ = self.self_msg_tx.send(AudioThreadEventMessage::new(
+                "".into(),
+                Some(AudioThreadMessage::NextSongGapless),
+            ));
+        }
+    }
+
+    pub(super) async fn resume_audio_output(&self) {
+        if let Some(handle) = &self.current_decoder_handle {
+            let _ = handle.set_paused(false);
+        }
+        if let Some(handle) = &self.secondary_decoder_handle {
+            let _ = handle.set_paused(false);
+        }
+
+        self.wait_for_start_prebuffer().await;
+        self.output.writer().set_paused(false);
+    }
+
+    async fn wait_for_start_prebuffer(&self) {
+        self.wait_for_prebuffer(
+            start_prebuffer_samples,
+            START_PREBUFFER_WAIT_MS,
+            "音频输出预缓冲不足",
+        )
+        .await;
+    }
+
+    pub(super) async fn wait_for_seek_prebuffer(&self) {
+        self.wait_for_prebuffer(
+            seek_prebuffer_samples,
+            SEEK_PREBUFFER_WAIT_MS,
+            "seek 快速预缓冲不足",
+        )
+        .await;
+    }
+
+    async fn wait_for_prebuffer(
+        &self,
+        target_samples_for: fn(usize, u32) -> usize,
+        wait_ms: u64,
+        warning: &str,
+    ) {
+        if self.current_decoder_handle.is_none() && self.secondary_decoder_handle.is_none() {
+            return;
+        }
+
+        let writer = self.output.writer();
+        let output_config = self.output.config();
+        let channels = output_config.channels.max(1) as usize;
+        let target_samples = target_samples_for(channels, output_config.sample_rate);
+        for _ in 0..wait_ms {
+            if writer.queued_samples() >= target_samples {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let queued = writer.queued_samples();
+        if queued < target_samples {
+            warn!(
+                "{}: queued_samples={} target_samples={}",
+                warning, queued, target_samples
+            );
+        }
+    }
+
+    /// Load and start `current_song`.
+    ///
+    /// Thin wrapper so the media session's buffering flag cannot survive a
+    /// failed load: the body below is full of `?` early-exits between the
+    /// `LoadingAudio` and `LoadAudio` events, and any one of them would
+    /// otherwise leave the notification spinning forever.
+    pub(super) async fn start_playing_song(
+        &mut self,
+        clear_sink: bool,
+        initial_position: Option<f64>,
+        load_request_id: Option<u64>,
+    ) -> anyhow::Result<()> {
+        let result = self
+            .start_playing_song_inner(clear_sink, initial_position, load_request_id)
+            .await;
+        if result.is_err() {
+            // Republish, don't just flip the flag: the session only learns that
+            // a load ended from an event, and a failed one emits no `LoadAudio`.
+            self.load_in_flight = false;
+            self.publish_now_playing().await;
+        }
+        result
+    }
+
+    async fn start_playing_song_inner(
+        &mut self,
+        clear_sink: bool,
+        initial_position: Option<f64>,
+        load_request_id: Option<u64>,
+    ) -> anyhow::Result<()> {
+        self.pending_seek = None;
+        // `current_identity` describes what is loaded *now*. A planner-driven
+        // load supplies one via `pending_identity`; a frontend-driven one is
+        // named by the announcement it always sends first (`AnnounceTrack`),
+        // which is bounded to exactly this load because `settle_announcement`
+        // clears it at the end of one.
+        //
+        // Falling back to the announcement is not cosmetic. Without it every
+        // frontend-driven load left `current_identity: None`, so the backend
+        // could not say *which* track it was playing — which meant no like
+        // state (`can_favourite` collapsed to false and dropped the heart from
+        // the notification entirely), no likelist lookup, and no identity for a
+        // reloading WebView to adopt.
+        self.current_identity = self
+            .pending_identity
+            .take()
+            .or_else(|| self.announced_track.as_ref().map(|(id, _)| id.clone()));
+        // Re-derive the heart for whatever that is — *after* the identity is
+        // set, since it is the key. Carrying the previous track's over would
+        // show a filled heart for a song the user never liked, and one tap would
+        // then unlike one they do.
+        self.refresh_favourite_for_current_track();
+        let song_data = self
+            .current_song
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("没有当前歌曲可播放"))?;
+
+        let file_path = match &song_data {
+            SongData::Local { file_path, .. } => file_path.clone(),
+            _ => return Err(anyhow::anyhow!("当前实现仅支持本地文件 / HTTP(S) 流")),
+        };
+        let music_id = song_data.get_id();
+
+        // Emit LoadingAudio so the frontend can show a spinner / await load.
+        self.load_in_flight = true;
+        let _ = self
+            .emitter()
+            .emit(AudioThreadEvent::LoadingAudio {
+                music_id: music_id.clone(),
+                current_play_index: self.current_play_index,
+                load_request_id,
+            })
+            .await;
+
+        // Replaying or advancing back onto the file that is already resolved
+        // locally (repeat-one wrap, same-track restart) must not re-download
+        // the source: take the temp guard out before the sink clear below
+        // drops it, and reuse the on-disk copy.
+        let reused_source = if self.current_file_path.as_deref() == Some(file_path.as_str()) {
+            self.current_local_path
+                .clone()
+                .filter(|path| path.exists())
+                .map(|path| (path, self.current_temp_file.take()))
+        } else {
+            None
+        };
+
+        if clear_sink {
+            self.cancel_pending_output_refresh();
+            self.automix_prepare_generation = self.automix_prepare_generation.wrapping_add(1);
+            if let Some(handle) = self.current_decoder_handle.take() {
+                handle.stop();
+            }
+            if let Some(handle) = self.secondary_decoder_handle.take() {
+                handle.stop();
+            }
+            self.deck_mixer.clear_all();
+
+            let _ = self.analysis_tx.send(AnalysisCommand::Clear);
+
+            // Drop the previous temp file (if any) by clearing the guard. This
+            // must happen BEFORE we assign the new temp path so disk usage stays
+            // bounded.
+            self.current_local_path = None;
+            self.current_temp_file = None;
+            self.secondary_local_path = None;
+            self.secondary_temp_file = None;
+            self.secondary_song = None;
+            self.secondary_duration = 0.0;
+            self.secondary_display_info = None;
+            self.secondary_quality = None;
+            self.secondary_playback_id = None;
+            self.active_deck = DeckId::Primary;
+            self.deck_mixer.set_deck_gain(DeckId::Primary, 1.0);
+            self.deck_mixer.set_deck_gain(DeckId::Secondary, 0.0);
+            // Fresh (non-automix) load starts unnormalized at unity gain.
+            self.active_norm_gain = 1.0;
+            self.secondary_norm_gain = 1.0;
+            self.bump_native_crossfade_gen();
+            self.native_crossfade_active = false;
+        }
+        self.current_file_path = Some(file_path.clone());
+
+        // Resolve URL → local path (download to temp) so rodio's File-based
+        // decoder can read it.
+        let (local_path, temp_file) = if let Some(reused) = reused_source {
+            reused
+        } else {
+            let resolve_path = file_path.clone();
+            let resolve_result = tokio::task::spawn_blocking(
+                move || -> AudioResult<(PathBuf, Option<tempfile::TempPath>)> {
+                    if decoder::is_http_url(&resolve_path) {
+                        let temp = decoder::download_to_temp_path(&resolve_path)?;
+                        let path = temp.to_path_buf();
+                        Ok((path, Some(temp)))
+                    } else {
+                        Ok((PathBuf::from(&resolve_path), None))
+                    }
+                },
+            )
+            .await?;
+
+            match resolve_result {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("解析音频源失败: {e:?}");
+                    let _ = self
+                        .emitter()
+                        .emit(AudioThreadEvent::LoadError {
+                            music_id: music_id.clone(),
+                            load_request_id,
+                            error: e.to_string(),
+                        })
+                        .await;
+                    return Err(e.into());
+                }
+            }
+        };
+
+        self.current_local_path = Some(local_path.clone());
+        self.current_temp_file = temp_file;
+
+        // Read metadata before opening output so the CPAL stream can match the
+        // source's channel count and sample rate where the device supports it.
+        let path_for_info = local_path.clone();
+        let info_result = tokio::task::spawn_blocking(move || {
+            decoder::symphonia::extract_metadata_only(&path_for_info)
+        })
+        .await?;
+
+        let audio_info = match info_result {
+            Ok(info) => info,
+            Err(e) => {
+                warn!("读取音频元数据失败: {e:?}");
+                let _ = self
+                    .emitter()
+                    .emit(AudioThreadEvent::LoadError {
+                        music_id: music_id.clone(),
+                        load_request_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+                return Err(e.into());
+            }
+        };
+
+        // An output that will not open is the one failure here that says nothing
+        // about the track, and it used to be the one that reported nothing at
+        // all: a bare `?` left the frontend's load promise unresolved, so a
+        // device switch that broke the probe showed as a track stuck loading
+        // forever. It has to look like every other load failure from the outside.
+        let _output_reopened = match self.ensure_output_for_source(&audio_info) {
+            Ok(reopened) => reopened,
+            Err(e) => {
+                warn!("打开音频输出失败: {e:?}");
+                let _ = self
+                    .emitter()
+                    .emit(AudioThreadEvent::LoadError {
+                        music_id: music_id.clone(),
+                        load_request_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+                return Err(e);
+            }
+        };
+        self.output.writer().set_volume(self.volume as f32);
+        // Keep the device callback silent until the decoder/mixer has filled
+        // the output queue; otherwise Android can underrun before the first PCM block arrives.
+        self.output.writer().set_paused(true);
+
+        // `initial_position` is applied inside the decoder worker before it
+        // starts pushing PCM, avoiding a separate post-load seek round trip.
+        let analysis_tx_for_open = self.analysis_tx.clone();
+        let path_for_open = local_path.clone();
+        let output_writer = match self.active_deck {
+            DeckId::Primary => self.deck_mixer.primary_writer(),
+            DeckId::Secondary => self.deck_mixer.secondary_writer(),
+        };
+        let output_config = self.output.config();
+        self.decoder_playback_id = self.decoder_playback_id.wrapping_add(1);
+        let playback_id = self.decoder_playback_id;
+        let decoder_event_tx = self.decoder_event_tx.clone();
+        let start_paused = self.playback_intent == PlaybackIntent::Paused;
+        let seek_into_open = initial_position.filter(|p| *p > 0.0);
+        let analysis_enabled_for_open = Arc::clone(&self.analysis_enabled);
+
+        let open_result = tokio::task::spawn_blocking(move || {
+            decoder::spawn_playback_decoder(
+                &path_for_open,
+                seek_into_open,
+                output_writer,
+                output_config.channels,
+                output_config.sample_rate,
+                analysis_tx_for_open,
+                analysis_enabled_for_open,
+                decoder_event_tx,
+                playback_id,
+                start_paused,
+            )
+        })
+        .await?;
+
+        let handle = match open_result {
+            Ok(handle) => handle,
+            Err(e) => {
+                warn!("打开音频源失败: {e:?}");
+                let _ = self
+                    .emitter()
+                    .emit(AudioThreadEvent::LoadError {
+                        music_id: music_id.clone(),
+                        load_request_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+                return Err(e.into());
+            }
+        };
+
+        self.current_decoder_handle = Some(handle);
+
+        // The starting position the position task should anchor at.
+        let anchor_pos = seek_into_open.unwrap_or(0.0);
+
+        // Use the symphonia-extracted duration; rodio's `total_duration()` is
+        // unreliable for MP3 without VBR headers and similar.
+        let display_info = DisplayAudioInfo {
+            name: extract_title_from_metadata(&audio_info).unwrap_or_else(|| {
+                Path::new(&file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string()
+            }),
+            artist: extract_tag(&audio_info, &["artist", "TPE1"]).unwrap_or_default(),
+            album: extract_tag(&audio_info, &["album", "TALB"]).unwrap_or_default(),
+            duration: audio_info.duration_secs,
+            // Carry the initial position so the frontend's `_state.position` is
+            // seeded correctly from the very first `LoadAudio` / `SyncStatus`.
+            position: anchor_pos,
+            ..Default::default()
+        };
+
+        let quality = AudioQuality {
+            sample_rate: audio_info.sample_rate,
+            channels: audio_info.channels,
+            bitrate: audio_info.bitrate_bps.map(|b| b as u32).unwrap_or_default(),
+        };
+
+        *self.current_audio_info.write().await = display_info.clone();
+        *self.current_audio_quality.write().await = quality.clone();
+        self.clock.lock().set_duration(audio_info.duration_secs);
+
+        // A new source is about to start: everything the previous timeline
+        // published is now stale, and this is what tells a subscriber so
+        // without it having to infer a track boundary from position magnitude.
+        let timeline_epoch = self.begin_timeline();
+
+        let is_now_playing = self.playback_intent == PlaybackIntent::Playing;
+        self.publish_position_anchor(is_now_playing, anchor_pos)
+            .await;
+
+        // Decoder is up and the timeline is anchored: whatever the media
+        // session was showing as "buffering" is now real playback.
+        self.load_in_flight = false;
+        let _ = self
+            .emitter()
+            .emit(AudioThreadEvent::LoadAudio {
+                music_id,
+                music_info: display_info,
+                quality,
+                current_play_index: self.current_play_index,
+                load_request_id,
+                identity: self.current_identity.clone(),
+                timeline_epoch,
+            })
+            .await;
+        if is_now_playing {
+            self.resume_audio_output().await;
+            let _ = self
+                .emitter()
+                .emit(AudioThreadEvent::PlayStatus { is_playing: true })
+                .await;
+        }
+
+        self.sync_ui().await;
+        // The announcement has served its purpose — whatever loaded is now the
+        // real projection, timeline and all.
+        self.settle_announcement();
+        // After the first publish, not before: `sync_ui` already showed the
+        // caller-supplied metadata, and this only fills a gap (a track the
+        // planner advanced to with no manifest row — i.e. the WebView was gone
+        // when it was queued). No-op when anything already knows the title.
+        self.hydrate_current_metadata();
+        Ok(())
+    }
+}
+
+// ── Metadata helpers ─────────────────────────────────────────────
+
+fn extract_tag(info: &AudioInfo, keys: &[&str]) -> Option<String> {
+    for (k, v) in &info.metadata_tags {
+        for key in keys {
+            if k.eq_ignore_ascii_case(key) {
+                return Some(v.clone());
+            }
+        }
+    }
+    None
+}
+
+fn extract_title_from_metadata(info: &AudioInfo) -> Option<String> {
+    extract_tag(info, &["title", "TIT2"])
+}

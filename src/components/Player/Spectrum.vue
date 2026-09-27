@@ -6,8 +6,8 @@
 </template>
 
 <script setup>
-import { storeToRefs } from "pinia";
-import { musicStore } from "@/store";
+import { ensureSpectrumUpdate } from "@/utils/AudioContext";
+import { getSpectrumFrame, getSpectrumVersion } from "@/utils/AudioContext/SpectrumFrame";
 
 const props = defineProps({
   show: {
@@ -28,78 +28,103 @@ const props = defineProps({
   },
 });
 
-const { spectrumsData } = storeToRefs(musicStore());
-
 // canvas
 const canvasRef = ref(null);
-const isKeepDrawing = ref(true);
+
+// Cached canvas dimensions — only update on resize, not every frame
+let cachedWidth = 0;
+let cachedHeight = 0;
+let displayPeak = 255;
+// getContext() is re-entrant but not free; the loop runs every frame, so keep
+// the 2D context alongside the size cache instead of re-fetching it per draw.
+let ctx = null;
+
+const updateCanvasSize = () => {
+  const canvas = canvasRef.value;
+  if (!canvas) return;
+  const w = Math.min(1600, document.body.clientWidth);
+  const h = props.height;
+  if (!ctx) ctx = canvas.getContext("2d");
+  if (cachedWidth !== w || cachedHeight !== h) {
+    cachedWidth = w;
+    cachedHeight = h;
+    canvas.width = w;
+    canvas.height = h;
+  }
+};
 
 /**
  * 绘制音乐频谱图
  * @param {Array} data - 包含音频频谱数据的数组
  */
- const drawSpectrum = (data) => {
-  // 提前退出条件：如果未提供数据或不需要继续绘制，则直接返回
-  if (!data || !isKeepDrawing.value) return;
-
-  // 获取画布和其2D上下文
+const drawSpectrum = (data) => {
   const canvas = canvasRef.value;
-  const ctx = canvas.getContext("2d");
-  
-  // 计算画布的宽度，最大为1600或客户端视口宽度的最小值
-  const canvasWidth = Math.min(1600, document.body.clientWidth);
-  // 使用 props 中的高度设置画布高度
-  const canvasHeight = props.height;
-  // 计算需要绘制的柱状图数量
-  const numBars = spectrumsData.value.length / 2.5;
-  // 计算每个柱状图的宽度
-  const barWidth = canvasWidth / numBars / 2;
-  // 获取圆角半径，从 props 中获取
-  const cornerRadius = props.radius;
-
-  // 设置画布的宽度和高度
-  canvas.width = canvasWidth;
-  canvas.height = canvasHeight;
-
-  // 在绘制前清空画布
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  // 设置柱状图的填充颜色
-  ctx.fillStyle = "#efefef";
-
-  // 遍历数据绘制柱状图
-  for (let i = 0; i < numBars; i++) {
-    // 计算柱状图的高度，从索引5开始跳过前5项数据
-    const barHeight = (data[i + 5] / 255) * canvasHeight;
-    
-    // 计算柱状图的 x 和 y 坐标
-    const x1 = i * barWidth + canvasWidth / 2; // 右侧柱状图的 x 坐标
-    const x2 = canvasWidth / 2 - (i + 1) * barWidth; // 左侧柱状图的 x 坐标
-    const y = canvasHeight - barHeight; // 柱状图的 y 坐标
-    
-    // 检查柱状图的高度是否大于0，避免绘制不可见的柱状图
-    if (barHeight > 0) {
-      // 绘制圆角矩形
-      roundRect(ctx, x1, y, barWidth - 3, barHeight, cornerRadius);
-      roundRect(ctx, x2, y, barWidth - 3, barHeight, cornerRadius);
-    }
+  if (!canvas) return;
+  if (!ctx) ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  if (!data || !data.length) {
+    // Frame was cleared (pause/track change) — wipe the canvas once instead of
+    // leaving stale bars behind.
+    ctx.clearRect(0, 0, cachedWidth, cachedHeight);
+    return;
   }
 
-  // 请求下一帧动画，继续绘制
-  requestAnimationFrame(() => drawSpectrum(spectrumsData.value));
+  const canvasWidth = cachedWidth;
+  const canvasHeight = cachedHeight;
+  const rawBinCount = data.length;
+  const numBars = Math.max(
+    1,
+    Math.min(rawBinCount, Math.floor(canvasWidth / (props.barWidth * 2))),
+  );
+  const barWidth = canvasWidth / numBars / 2;
+  const cornerRadius = props.radius;
+  let framePeak = 0;
+  for (let i = 0; i < rawBinCount; i++) {
+    if (data[i] > framePeak) framePeak = data[i];
+  }
+  if (framePeak <= 0) {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    return;
+  }
+  if (framePeak > displayPeak) {
+    displayPeak = displayPeak * 0.55 + framePeak * 0.45;
+  } else {
+    displayPeak = Math.max(255, displayPeak * 0.96);
+  }
+
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  ctx.fillStyle = "#efefef";
+
+  // Batch all bars into a single path. Each visual bar is a peak-reduced
+  // range over the full FFT frame, so a 2048-bin native frame keeps its
+  // precision instead of only drawing the first ~200 bins.
+  ctx.beginPath();
+  for (let i = 0; i < numBars; i++) {
+    const start = Math.floor((i / numBars) * rawBinCount);
+    const end = Math.max(start + 1, Math.floor(((i + 1) / numBars) * rawBinCount));
+    let value = 0;
+    for (let j = start; j < end; j++) {
+      if (data[j] > value) value = data[j];
+    }
+    const barHeight = Math.min(1, value / displayPeak) * canvasHeight;
+    if (barHeight <= 0) continue;
+
+    const x1 = i * barWidth + canvasWidth / 2;
+    const x2 = canvasWidth / 2 - (i + 1) * barWidth;
+    const y = canvasHeight - barHeight;
+    const w = barWidth - 3;
+
+    // Use native roundRect if available, otherwise fallback
+    addRoundRect(ctx, x1, y, w, barHeight, cornerRadius);
+    addRoundRect(ctx, x2, y, w, barHeight, cornerRadius);
+  }
+  ctx.fill();
 };
 
 /**
- * 绘制圆角矩形
- * @param {CanvasRenderingContext2D} ctx - 2D上下文
- * @param {number} x - 矩形左上角 x 坐标
- * @param {number} y - 矩形左上角 y 坐标
- * @param {number} width - 矩形宽度
- * @param {number} height - 矩形高度
- * @param {number} radius - 圆角半径
+ * 添加圆角矩形路径（不立即 fill，批量绘制）
  */
-const roundRect = (ctx, x, y, width, height, radius) => {
-  ctx.beginPath();
+const addRoundRect = (ctx, x, y, width, height, radius) => {
   ctx.moveTo(x + radius, y);
   ctx.lineTo(x + width - radius, y);
   ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
@@ -110,16 +135,94 @@ const roundRect = (ctx, x, y, width, height, radius) => {
   ctx.lineTo(x, y + radius);
   ctx.quadraticCurveTo(x, y, x + radius, y);
   ctx.closePath();
-  ctx.fill();
 };
 
+// Managed RAF loop. Keep it alive while mounted so opening BigPlayer can draw
+// the latest frame immediately after the user toggles spectrum display.
+// Two gates keep the loop from burning CPU when its output cannot be seen:
+// - version gate: skip the canvas work when no new spectrum frame arrived
+//   (paused / analysis stopped / background tab)
+// - show gate: BigPlayer slides off-screen via translateY(100%) when closed,
+//   taking this fixed-position canvas with it — after the slide transition
+//   settles there is nothing visible to draw, so the loop parks entirely
+//   until `show` flips back.
+let rafId = null;
+let lastDrawnVersion = -1;
+let hideParkTimer = null;
+const HIDE_PARK_DELAY_MS = 1000; // outlasts the 0.5s close transition
+
+const startDraw = () => {
+  if (rafId) return;
+  const loop = () => {
+    const version = getSpectrumVersion();
+    if (version !== lastDrawnVersion) {
+      lastDrawnVersion = version;
+      drawSpectrum(getSpectrumFrame());
+    }
+    rafId = requestAnimationFrame(loop);
+  };
+  loop();
+};
+
+const stopDraw = () => {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+};
+
+const clearHideParkTimer = () => {
+  if (hideParkTimer) {
+    clearTimeout(hideParkTimer);
+    hideParkTimer = null;
+  }
+};
+
+// ResizeObserver to track canvas size changes
+let resizeObserver = null;
+
+watch(
+  () => props.show,
+  (visible) => {
+    updateCanvasSize();
+    ensureSpectrumUpdate();
+    clearHideParkTimer();
+    if (visible) {
+      lastDrawnVersion = -1; // force an immediate redraw of the latest frame
+      startDraw();
+    } else {
+      hideParkTimer = setTimeout(() => {
+        hideParkTimer = null;
+        stopDraw();
+      }, HIDE_PARK_DELAY_MS);
+    }
+  },
+);
+
 onMounted(() => {
-  drawSpectrum(spectrumsData.value);
+  updateCanvasSize();
+  ensureSpectrumUpdate();
+
+  // Watch for container/window resize
+  if (typeof ResizeObserver !== "undefined" && canvasRef.value?.parentElement) {
+    resizeObserver = new ResizeObserver(updateCanvasSize);
+    resizeObserver.observe(canvasRef.value.parentElement);
+  }
+
+  // Off-screen at mount (player closed) — the show watcher starts the loop.
+  if (props.show) {
+    startDraw();
+  }
 });
 
-
 onBeforeUnmount(() => {
-  isKeepDrawing.value = false;
+  clearHideParkTimer();
+  stopDraw();
+  ctx = null;
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
 });
 </script>
 
@@ -135,37 +238,45 @@ onBeforeUnmount(() => {
   justify-content: center;
   opacity: 0.6;
   pointer-events: none;
-  transition: opacity 0.3s;
-  mask: linear-gradient(90deg,
-      hsla(0, 0%, 100%, 0) 0,
-      hsla(0, 0%, 100%, 0.6) 10%,
-      #fff 15%,
-      #fff 85%,
-      hsla(0, 0%, 100%, 0.6) 90%,
-      hsla(0, 0%, 100%, 0));
-  -webkit-mask: linear-gradient(90deg,
-      hsla(0, 0%, 100%, 0) 0,
-      hsla(0, 0%, 100%, 0.6) 10%,
-      #fff 15%,
-      #fff 85%,
-      hsla(0, 0%, 100%, 0.6) 90%,
-      hsla(0, 0%, 100%, 0));
+  transition: opacity var(--duration-300) var(--ease-out);
+  mask: linear-gradient(
+    90deg,
+    hsla(0, 0%, 100%, 0) 0,
+    hsla(0, 0%, 100%, 0.6) 10%,
+    #fff 15%,
+    #fff 85%,
+    hsla(0, 0%, 100%, 0.6) 90%,
+    hsla(0, 0%, 100%, 0)
+  );
+  -webkit-mask: linear-gradient(
+    90deg,
+    hsla(0, 0%, 100%, 0) 0,
+    hsla(0, 0%, 100%, 0.6) 10%,
+    #fff 15%,
+    #fff 85%,
+    hsla(0, 0%, 100%, 0.6) 90%,
+    hsla(0, 0%, 100%, 0)
+  );
 
   .spectrum-line {
-    mask: linear-gradient(90deg,
-        hsla(0, 0%, 100%, 0) 0,
-        hsla(0, 0%, 100%, 0.6) 5%,
-        #fff 10%,
-        #fff 90%,
-        hsla(0, 0%, 100%, 0.6) 95%,
-        hsla(0, 0%, 100%, 0));
-    -webkit-mask: linear-gradient(90deg,
-        hsla(0, 0%, 100%, 0) 0,
-        hsla(0, 0%, 100%, 0.6) 5%,
-        #fff 10%,
-        #fff 90%,
-        hsla(0, 0%, 100%, 0.6) 95%,
-        hsla(0, 0%, 100%, 0));
+    mask: linear-gradient(
+      90deg,
+      hsla(0, 0%, 100%, 0) 0,
+      hsla(0, 0%, 100%, 0.6) 5%,
+      #fff 10%,
+      #fff 90%,
+      hsla(0, 0%, 100%, 0.6) 95%,
+      hsla(0, 0%, 100%, 0)
+    );
+    -webkit-mask: linear-gradient(
+      90deg,
+      hsla(0, 0%, 100%, 0) 0,
+      hsla(0, 0%, 100%, 0.6) 5%,
+      #fff 10%,
+      #fff 90%,
+      hsla(0, 0%, 100%, 0.6) 95%,
+      hsla(0, 0%, 100%, 0)
+    );
   }
 }
 </style>

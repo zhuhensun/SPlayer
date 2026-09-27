@@ -7,7 +7,7 @@
   <link rel="apple-touch-icon" href="%VITE_SITE_APPLE_LOGO%" />
   <link rel="bookmark" href="%VITE_SITE_APPLE_LOGO%" />
   <link rel="apple-touch-icon-precomposed" sizes="200x200" href="%VITE_SITE_APPLE_LOGO%" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>%VITE_SITE_TITLE%</title>
   <meta name="apple-mobile-web-app-title" content="%VITE_SITE_TITLE%" />
   <meta name="author" content="%VITE_SITE_ANTHOR%" />
@@ -18,6 +18,15 @@
   <link rel="stylesheet" href="https://s1.hdslb.com/bfs/static/jinkela/long/font/regular.css" />
   <!-- IE Out -->
   <script>
+    // 只吞掉原生菜单。挂在 document 冒泡阶段且不调 stopPropagation，所以元素上的
+    // @contextmenu(DataLists / CoverLists / ArtistLists 的右键菜单)一定先执行，不受影响。
+    // 文本输入区放行：那里的原生复制/粘贴菜单在桌面端仍然是需要的。
+    document.addEventListener('contextmenu', function (event) {
+      var target = event.target;
+      var tag = target && target.tagName;
+      if (target && (target.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA')) return;
+      event.preventDefault();
+    });
     if (
       /*@cc_on!@*/
       false ||
@@ -58,7 +67,7 @@
     <p class="title">%VITE_SITE_TITLE%</p>
     <p class="tip">请开启 JavaScript | Please enable JavaScript to use this site</p>
   </noscript>
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 
 </html>

@@ -1,6 +1,9 @@
 <template>
   <div class="songs">
-    <DataLists :listData="searchData" />
+    <PageLoadState v-if="error" error @retry="retry" />
+    <div v-else class="song-panel">
+      <DataLists :listData="searchData" :loading="loading" virtual />
+    </div>
     <Pagination
       v-if="searchData[0]"
       :pageNumber="pageNumber"
@@ -11,106 +14,147 @@
   </div>
 </template>
 
-<script setup>
-import { getSearchData } from "@/api/search";
-// import { getMusicDetail } from "@/api/song";
-import { useRouter } from "vue-router";
-import { getSongTime } from "@/utils/timeTools";
-import { useI18n } from "vue-i18n";
+<script setup lang="ts">
 import DataLists from "@/components/DataList/DataLists.vue";
+import PageLoadState from "@/components/Navigation/PageLoadState.vue";
 import Pagination from "@/components/Pagination/index.vue";
+import { useSearchResults } from "@/composables/useSearchResults";
+import { transformSongData } from "@/utils/ncm/transformSongData";
 
-const { t } = useI18n();
-const router = useRouter();
-
-// 搜索数据
-const searchKeywords = ref(router.currentRoute.value.query.keywords);
-const searchData = ref([]);
-const totalCount = ref(0);
-const pagelimit = ref(30);
-const pageNumber = ref(
-  router.currentRoute.value.query.page
-    ? Number(router.currentRoute.value.query.page)
-    : 1
-);
-
-// 获取搜索数据
-const getSearchDataList = (keywords, limit = 30, offset = 0, type = 1) => {
-  getSearchData(keywords, limit, offset, type).then((res) => {
-    console.log(res);
-    // 列表数据
-    if (res.result.songs) {
-      // 数据总数
-      totalCount.value = res.result.songCount;
-      // const ids = res.result.songs.map((obj) => obj.id);
-      // getMusicDetail(ids.join(",")).then((res) => {});
-      // console.log(res);
-      searchData.value = [];
-      res.result.songs.forEach((v, i) => {
-        searchData.value.push({
-          id: v.id,
-          num: i + 1 + (pageNumber.value - 1) * pagelimit.value,
-          name: v.name,
-          artist: v.ar,
-          album: v.al,
-          alia: v.alia,
-          time: getSongTime(v.dt),
-          fee: v.fee,
-          pc: v.pc ? v.pc : null,
-          mv: v.mv ? v.mv : null,
-        });
-      });
-    } else {
-      $message.error(t("general.message.acquisitionFailed"));
-    }
-    // 请求后回顶
-    if (typeof $scrollToTop !== "undefined") $scrollToTop();
-  });
-};
-
-// 监听路由参数变化
-watch(
-  () => router.currentRoute.value,
-  (val) => {
-    searchKeywords.value = val.query.keywords;
-    pageNumber.value = Number(val.query.page ? val.query.page : 1);
-    if (val.name == "s-songs") {
-      getSearchDataList(
-        searchKeywords.value,
-        pagelimit.value,
-        pageNumber.value ? (pageNumber.value - 1) * pagelimit.value : 0
-      );
-    }
-  }
-);
-
-// 每页个数数据变化
-const pageSizeChange = (val) => {
-  console.log(val);
-  pagelimit.value = val;
-  getSearchDataList(
-    searchKeywords.value,
-    val,
-    (pageNumber.value - 1) * pagelimit.value
-  );
-};
-
-// 当前页数数据变化
-const pageNumberChange = (val) => {
-  router.push({
-    path: "/search/songs",
-    query: {
-      keywords: searchKeywords.value,
-      page: val,
-    },
-  });
-};
-
-onMounted(() => {
-  getSearchDataList(
-    searchKeywords.value,
-    pagelimit.value,
-    (pageNumber.value - 1) * pagelimit.value
-  );
+const {
+  items: searchData,
+  loading,
+  error,
+  retry,
+  totalCount,
+  pageNumber,
+  pageSizeChange,
+  pageNumberChange,
+} = useSearchResults({
+  category: "songs",
+  type: 1,
+  items: "songs",
+  total: "songCount",
+  map: (items, offset) => transformSongData(items, { offset }),
 });
 </script>
+
+<style lang="scss" scoped>
+.songs {
+  .song-panel {
+    --detail-song-list-radius: var(--radius-md);
+
+    width: 100%;
+    min-width: 0;
+
+    :deep(.datalists .songs) {
+      --n-color: transparent;
+      --n-border-color: transparent;
+
+      margin-bottom: 0;
+      border: 0;
+      border-radius: 0;
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    :deep(.datalists .songs:nth-child(odd)),
+    :deep(.datalists .songs.song-row-odd) {
+      background-color: color-mix(in srgb, var(--n-text-color) 3%, transparent);
+    }
+
+    :deep(.datalists .songs:nth-child(even)),
+    :deep(.datalists .songs.song-row-even) {
+      background-color: color-mix(in srgb, var(--n-text-color) 6%, transparent);
+    }
+
+    :deep(.datalists .songs.song-row-first) {
+      border-radius: var(--detail-song-list-radius) var(--detail-song-list-radius) 0 0;
+    }
+
+    :deep(.datalists .songs.song-row-last) {
+      border-radius: 0 0 var(--detail-song-list-radius) var(--detail-song-list-radius);
+    }
+
+    :deep(.datalists .songs.song-row-single) {
+      border-radius: var(--detail-song-list-radius);
+    }
+
+    :deep(.datalists .songs:hover) {
+      background-color: color-mix(in srgb, var(--n-text-color) 10%, transparent);
+      box-shadow: none;
+    }
+
+    :deep(.datalists .songs.play) {
+      background-color: color-mix(in srgb, var(--main-color) 13%, transparent);
+    }
+
+    :deep(.datalists .songs .n-card__content) {
+      min-height: 52px;
+      padding: 8px 12px !important;
+    }
+
+    :deep(.datalists .songs .pic),
+    :deep(.datalists .songs .num) {
+      width: 38px;
+      height: 38px;
+      min-width: 38px;
+      margin-right: 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+
+    :deep(.datalists .songs .name .title) {
+      font-size: 14px;
+    }
+
+    :deep(.datalists .songs .name .meta) {
+      font-size: 12px;
+    }
+
+    :deep(.datalists .songs .album) {
+      font-size: 13px;
+      opacity: 0.72;
+    }
+
+    :deep(.datalists .songs .time) {
+      font-size: 12px;
+      opacity: 0.64;
+    }
+
+    :deep(.datalists .songs .action) {
+      width: 76px;
+    }
+  }
+
+  :deep(.pagination) {
+    margin-top: 18px;
+  }
+
+  @media (max-width: 768px) {
+    .song-panel {
+      :deep(.datalists .songs .n-card__content) {
+        min-height: 58px;
+        padding: 9px 6px !important;
+      }
+
+      :deep(.datalists .songs .pic),
+      :deep(.datalists .songs .num) {
+        width: 42px;
+        height: 42px;
+        min-width: 42px;
+        margin-right: 11px;
+      }
+
+      :deep(.datalists .songs .name) {
+        padding-right: 8px;
+      }
+
+      :deep(.datalists .songs .album),
+      :deep(.datalists .songs .time) {
+        display: none;
+      }
+    }
+  }
+}
+</style>

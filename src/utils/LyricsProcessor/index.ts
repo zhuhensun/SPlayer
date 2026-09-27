@@ -1,0 +1,69 @@
+/**
+ * LyricsProcessor Module
+ * 歌词处理模块 - 统一导出
+ */
+
+// Types
+export type {
+  LyricLine,
+  LyricWord,
+  AMLLLine,
+  AMLLWord,
+  StoredLyricLine,
+  LyricData,
+  LyricMeta,
+  SongLyric,
+  SettingState,
+  ProcessingSettings,
+  InputLyricLine,
+  InputLyricWord,
+  TimeTextEntry,
+  ParsedLrcLine,
+  ParsedYrcLine,
+  RawLyricData,
+  ParsedLyricResult,
+} from "./types";
+
+// Time utilities
+export {
+  parseLrcTime,
+  formatLrcTime,
+  detectYrcType,
+  detectWordTimedLyricFormat,
+} from "./timeUtils";
+
+// Entry parsing
+export {
+  parseLrcToEntries,
+  buildTimeMap,
+  strictTimeMatch,
+  strictTimeMatchBinary,
+} from "./parser/entryParser";
+
+// Format parsing
+export { parseLrcLines, parseYrcLines, buildAMLLData, convertToAMLL } from "./parser/formatParser";
+
+// Alignment
+export { alignByIndex, isInterludeLine, buildIndexMatching } from "./alignment";
+
+// Main parser
+export { parseLyricData, createEmptyLyricResult, resetSongLyric } from "./lyricParser";
+
+// Processing
+export { processLyrics, preprocessLyrics, getProcessedLyrics } from "./processor";
+
+// Service
+export { LyricService } from "./service";
+
+// === Backward compatibility aliases ===
+// These allow old import names to keep working
+
+export { parseLyricData as parseLyric } from "./lyricParser";
+export { parseLrcLines as parseLrcData } from "./parser/formatParser";
+export { parseYrcLines as parseYrcData } from "./parser/formatParser";
+export { buildAMLLData as parseAMData } from "./parser/formatParser";
+export { alignByIndex as alignLyrics } from "./alignment";
+export { createEmptyLyricResult as getDefaultLyricResult } from "./lyricParser";
+
+// Default export for backward compatibility
+export { parseLyricData as default } from "./lyricParser";

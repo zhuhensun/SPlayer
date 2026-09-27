@@ -1,16 +1,12 @@
 <template>
   <div class="paplaylists">
-    <n-h3 class="title" prefix="bar">
-      {{ $t("home.title.playlists") }}
-      <span class="more" @click="router.push('/discover/playlists?page=1')">
+    <div class="home-section-head">
+      <h2 class="head-title">{{ $t("home.title.playlists") }}</h2>
+      <span class="head-more" @click="router.push('/discover/playlists?page=1')">
         {{ $t("home.title.more") }}
       </span>
-    </n-h3>
-    <CoverLists
-      :listData="personalizedData"
-      :loadingNum="12"
-      :gridCollapsed="true"
-    />
+    </div>
+    <CoverLists :listData="personalizedData" :loadingNum="12" :gridCollapsed="true" />
   </div>
 </template>
 
@@ -50,25 +46,9 @@ onMounted(() => {
 
 <style lang="scss" scoped>
 .paplaylists {
-  margin-top: 40px;
   padding: 0 4px;
-  .title {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-left: 16px;
-    .more {
-      font-size: 14px;
-      transition: all 0.3s;
-      cursor: pointer;
-      &::after {
-        content: ">";
-        margin-left: 6px;
-      }
-      &:hover {
-        color: var(--main-color);
-      }
-    }
-  }
+  position: relative;
+  transform: translateZ(0);
+  perspective: 1px;
 }
 </style>

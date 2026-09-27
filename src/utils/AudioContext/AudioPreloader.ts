@@ -1,0 +1,234 @@
+/**
+ * AudioPreloader — Preloads the next song as a fully buffered BufferedSound.
+ *
+ * When the current song starts playing, this module creates a BufferedSound
+ * for the next song in the playlist. On track change, the preloaded sound
+ * is consumed directly, skipping API calls and network download entirely.
+ *
+ * - Preload depth: 1 song (~5-15MB in memory)
+ * - Only activates in 'normal' play mode (random/single are unpredictable)
+ * - Coexists with AutoMix (skips preload when AutoMix is active)
+ */
+
+import { BufferedSound } from "./BufferedSound";
+import { resolveSongUrl } from "./resolveSongUrl";
+import { getAutoMixEngine } from "./AutoMix";
+import { isAudioBackendRuntimeAvailable } from "@/utils/tauri/audio/nativeRustSound";
+// Import store directly to avoid circular dependency through barrel exports
+import useMusicDataStore from "@/store/musicData";
+
+// Lazy store access (called at runtime, not import time)
+const musicStore = () => useMusicDataStore();
+
+interface PreloadedEntry {
+  songId: number;
+  songIndex: number;
+  sound: BufferedSound;
+  ready: boolean;
+  timeoutId: ReturnType<typeof setTimeout> | null;
+}
+
+const IS_DEV = import.meta.env?.DEV ?? false;
+
+export class AudioPreloader {
+  private _entry: PreloadedEntry | null = null;
+  private _isPreloading: boolean = false;
+  private _abortController: AbortController | null = null;
+
+  /** Called when current song starts playing — preloads the next song */
+  preloadNext(): void {
+    const music = musicStore();
+
+    // Guard: Rust backend handles its own load path,
+    // so preloading a BufferedSound would be wasteful and would
+    // silently switch the audio pipeline back to Web Audio on consume.
+    if (isAudioBackendRuntimeAvailable()) return;
+
+    // Guard: not FM, not single-repeat, list >= 2, not already preloading.
+    // Random mode is preloadable now: the queue itself carries the shuffle, so
+    // the next index is the next song (see `musicData.shufflePlaylistOrder`).
+    if (music.persistData.personalFmMode) return;
+    if (music.persistData.playSongMode === "single") return;
+    if (music.persistData.playlists.length < 2) return;
+    if (this._isPreloading) return;
+
+    // Guard: AutoMix active — let it handle transitions
+    const autoMix = getAutoMixEngine();
+    const state = autoMix.getState();
+    if (
+      state === "analyzing" ||
+      state === "waiting" ||
+      state === "crossfading" ||
+      state === "finishing"
+    ) {
+      return;
+    }
+
+    // Compute next index
+    const currentIndex = music.persistData.playSongIndex;
+    const listLength = music.persistData.playlists.length;
+    const nextIndex = (currentIndex + 1) % listLength;
+    const nextSong = music.persistData.playlists[nextIndex];
+    if (!nextSong) return;
+
+    // Guard: already cached this exact song
+    if (this._entry && this._entry.songId === nextSong.id && this._entry.songIndex === nextIndex) {
+      return;
+    }
+
+    // Clean up any previous entry before starting new preload
+    this.cleanup();
+
+    this._isPreloading = true;
+    this._abortController = new AbortController();
+    const abortSignal = this._abortController.signal;
+
+    if (IS_DEV) {
+      console.log(
+        `[AudioPreloader] Starting preload: "${nextSong.name}" (id: ${nextSong.id}, index: ${nextIndex})`,
+      );
+    }
+
+    this._resolveAndPreload(nextSong, nextIndex, abortSignal);
+  }
+
+  /** Resolve music URL and create BufferedSound */
+  private async _resolveAndPreload(
+    nextSong: any,
+    nextIndex: number,
+    abortSignal: AbortSignal,
+  ): Promise<void> {
+    try {
+      // Step 1: Resolve URL (unified: NCM + trial detection + UNM fallback + kuwo proxy)
+      const result = await resolveSongUrl(nextSong, undefined, { signal: abortSignal });
+      if (abortSignal.aborted) return;
+
+      if (!result) {
+        if (IS_DEV) {
+          console.warn(`[AudioPreloader] No URL resolved for: ${nextSong.name}`);
+        }
+        this._isPreloading = false;
+        return;
+      }
+      const url = result.url;
+
+      // Step 2: Create BufferedSound with volume=0 (will be set to real volume on consume)
+      const sound = new BufferedSound({
+        src: [url],
+        preload: true,
+        volume: 0,
+      });
+
+      const entry: PreloadedEntry = {
+        songId: nextSong.id,
+        songIndex: nextIndex,
+        sound,
+        ready: false,
+        timeoutId: null,
+      };
+      this._entry = entry;
+
+      // Wait for load with timeout
+      entry.timeoutId = setTimeout(() => {
+        if (!entry.ready && this._entry === entry) {
+          if (IS_DEV) {
+            console.warn(`[AudioPreloader] Timeout for: ${nextSong.name}`);
+          }
+          this.cleanup();
+        }
+      }, 30000);
+
+      sound.once("load", () => {
+        if (entry.timeoutId !== null) {
+          clearTimeout(entry.timeoutId);
+          entry.timeoutId = null;
+        }
+        if (abortSignal.aborted || this._entry !== entry) return;
+        entry.ready = true;
+        this._isPreloading = false;
+        if (IS_DEV) {
+          console.log(`[AudioPreloader] Preloaded: "${nextSong.name}" (id: ${nextSong.id})`);
+        }
+      });
+
+      sound.once("loaderror", () => {
+        if (entry.timeoutId !== null) {
+          clearTimeout(entry.timeoutId);
+          entry.timeoutId = null;
+        }
+        if (this._entry === entry) {
+          if (IS_DEV) {
+            console.warn(`[AudioPreloader] Load error for: ${nextSong.name}`);
+          }
+          this.cleanup();
+        }
+      });
+    } catch (err) {
+      if (abortSignal.aborted) return;
+      if (IS_DEV) {
+        console.warn("[AudioPreloader] _resolveAndPreload failed:", err);
+      }
+      this._isPreloading = false;
+    }
+  }
+
+  /** Consume the preloaded BufferedSound if it matches songId. Returns null otherwise. */
+  consume(songId: number): BufferedSound | null {
+    if (!this._entry) return null;
+
+    if (this._entry.songId === songId && this._entry.ready) {
+      const sound = this._entry.sound;
+      this._entry = null;
+      this._isPreloading = false;
+      if (IS_DEV) {
+        console.log(`[AudioPreloader] Consumed preloaded sound for id: ${songId}`);
+      }
+      return sound;
+    }
+
+    // Mismatch or not ready — cleanup
+    this.cleanup();
+    return null;
+  }
+
+  /** Check if a specific song is preloaded (without consuming) */
+  has(songId: number): boolean {
+    return this._entry !== null && this._entry.songId === songId && this._entry.ready;
+  }
+
+  /** Clean up all preloaded resources */
+  cleanup(): void {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+    if (this._entry) {
+      if (this._entry.timeoutId !== null) {
+        clearTimeout(this._entry.timeoutId);
+        this._entry.timeoutId = null;
+      }
+      // Unload the preloaded sound to free memory
+      try {
+        this._entry.sound.unload();
+      } catch {
+        // Ignore errors during cleanup
+      }
+      this._entry = null;
+    }
+    this._isPreloading = false;
+  }
+
+  get isPreloading(): boolean {
+    return this._isPreloading;
+  }
+}
+
+// Singleton
+let _instance: AudioPreloader | null = null;
+
+export function getAudioPreloader(): AudioPreloader {
+  if (!_instance) {
+    _instance = new AudioPreloader();
+  }
+  return _instance;
+}

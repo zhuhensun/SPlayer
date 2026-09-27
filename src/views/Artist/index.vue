@@ -1,175 +1,260 @@
 <template>
-  <div class="artist">
-    <div class="artistData" v-if="artistId && artistData">
-      <div class="cover">
-        <n-avatar
-          round
+  <div class="artist" v-if="artistId && artistData">
+    <div class="left">
+      <RouteArtwork class="cover" data-navigation-cover="page">
+        <RouteCover
           class="coverImg"
-          :src="artistData.cover.replace(/^http:/, 'https:') + '?param=300y300'"
-          fallback-src="/images/pic/default.png"
+          :src="getCoverUrl(safeArtistCover, 1024)"
+          :preview-src="getCoverUrl(safeArtistCover)"
         />
-      </div>
-      <div class="data">
-        <n-text class="name">{{ artistData.name }}</n-text>
-        <n-text class="occupation" :depth="3">
-          {{ artistData.occupation }}
-        </n-text>
-        <div class="num">
-          <n-text class="musicSize" @click="tabChange('songs')">
-            <n-icon :component="MusicNoteFilled" />
-            {{ $t("general.name.songSize", { size: artistData.musicSize }) }}
-          </n-text>
-          <n-text class="albumSize" @click="tabChange('albums')">
-            <n-icon :component="AlbumFilled" />
-            {{ $t("general.name.albumSize", { size: artistData.albumSize }) }}
-          </n-text>
-          <n-text class="mvSize" @click="tabChange('videos')">
-            <n-icon :component="VideocamRound" />
-            {{ $t("general.name.mvSize", { size: artistData.mvSize }) }}
+        <RouteShadow class="shadow" :src="getCoverUrl(safeArtistCover, 512)" />
+      </RouteArtwork>
+
+      <div class="meta">
+        <div class="title">
+          <span v-content-intro class="detail-kind">{{ $t("general.name.artists") }}</span>
+          <n-text class="name" data-navigation-title="page">{{ artistData.name }}</n-text>
+          <n-text v-if="artistData.occupation" v-content-intro class="creator">
+            {{ artistData.occupation }}
           </n-text>
         </div>
-        <n-text class="desc text-hidden" @click="artistDescShow = true">
-          {{ artistData.desc }}
-        </n-text>
-        <n-space class="button" v-if="user.userLogin">
-          <!-- <n-button type="primary" strong secondary>
+
+        <div v-content-intro class="detail-stats">
+          <button class="num" type="button" @click="tabChange('songs')">
+            <n-icon :depth="3" :component="MusicNoteFilled" />
+            <n-text>{{ $t("general.name.songSize", { size: artistData.musicSize }) }}</n-text>
+          </button>
+          <button class="num" type="button" @click="tabChange('albums')">
+            <n-icon :depth="3" :component="AlbumFilled" />
+            <n-text>{{ $t("general.name.albumSize", { size: artistData.albumSize }) }}</n-text>
+          </button>
+          <button class="num" type="button" @click="tabChange('videos')">
+            <n-icon :depth="3" :component="VideocamRound" />
+            <n-text>{{ $t("general.name.mvSize", { size: artistData.mvSize }) }}</n-text>
+          </button>
+        </div>
+
+        <div v-content-intro class="intr" v-if="artistData.desc">
+          <span class="name">{{ $t("general.name.artistDesc") }}</span>
+          <span class="desc text-hidden">{{ artistData.desc }}</span>
+          <n-button class="all-desc" strong secondary @click="artistDescShow = true">
+            {{ $t("general.name.allDesc") }}
+          </n-button>
+        </div>
+
+        <n-space v-content-intro class="control">
+          <n-button
+            strong
+            secondary
+            round
+            type="primary"
+            :loading="artistSongsLoading"
+            :disabled="!artistData.musicSize"
+            @click="playArtistSongs"
+          >
             <template #icon>
               <n-icon :component="PlayArrowRound" />
             </template>
-            播放热门歌曲
-          </n-button> -->
+            {{ $t("general.name.play") }}
+          </n-button>
           <n-button
-            :type="artistLikeBtn ? 'primary' : 'default'"
+            v-if="user.userLogin"
+            class="icon-action"
             strong
             secondary
+            circle
+            :type="artistLikeBtn ? 'default' : 'primary'"
             @click="toLikeArtist(artistData)"
           >
             <template #icon>
-              <n-icon
-                :component="
-                  artistLikeBtn ? PersonAddAlt1Round : PersonRemoveAlt1Round
-                "
-              />
+              <n-icon :component="artistLikeBtn ? PersonAddAlt1Round : PersonRemoveAlt1Round" />
             </template>
-            {{
-              artistLikeBtn
-                ? $t("menu.collection", { name: $t("general.name.artists") })
-                : $t("menu.cancelCollection", {
-                    name: $t("general.name.artists"),
-                  })
-            }}
+          </n-button>
+          <n-button
+            v-if="artistData.desc"
+            class="icon-action"
+            strong
+            secondary
+            circle
+            @click="artistDescShow = true"
+          >
+            <template #icon>
+              <n-icon :component="MoreHorizRound" />
+            </template>
           </n-button>
         </n-space>
-        <!-- 歌手介绍 -->
-        <n-modal
-          class="s-modal"
-          v-model:show="artistDescShow"
-          preset="card"
-          :title="$t('general.name.artistDesc')"
-          :bordered="false"
-        >
-          <n-scrollbar>
-            <n-text v-html="artistData.desc.replace(/\n/g, '<br>')" />
-          </n-scrollbar>
-        </n-modal>
       </div>
     </div>
-    <div class="error" v-else-if="!artistId">
-      <n-text>{{ $t("general.name.noKeywords") }}</n-text>
-      <br />
-      <n-button
-        strong
-        secondary
-        @click="router.go(-1)"
-        style="margin-top: 20px"
-      >
-        {{ $t("general.name.goBack") }}
-      </n-button>
-    </div>
+
     <n-tabs
+      v-content-intro
       class="main-tab"
-      type="segment"
+      type="line"
       @update:value="tabChange"
       v-model:value="tabValue"
-      v-if="artistData"
     >
       <n-tab name="songs"> {{ $t("general.name.hotSong") }} </n-tab>
       <n-tab name="albums"> {{ $t("general.name.album") }} </n-tab>
       <n-tab name="videos"> MV </n-tab>
     </n-tabs>
-    <main class="content" v-if="artistData">
-      <router-view
-        v-slot="{ Component }"
-        :mvSize="artistData ? artistData.mvSize : null"
-      >
-        <keep-alive>
-          <Transition name="move" mode="out-in">
+
+    <main class="content">
+      <router-view v-slot="{ Component }" :mvSize="artistData ? artistData.mvSize : null">
+        <Transition :name="transitionName" mode="out-in">
+          <keep-alive :max="3">
             <component :is="Component" />
-          </Transition>
-        </keep-alive>
+          </keep-alive>
+        </Transition>
       </router-view>
     </main>
+
+    <n-modal
+      class="s-modal"
+      v-model:show="artistDescShow"
+      preset="card"
+      :title="$t('general.name.artistDesc')"
+      :bordered="false"
+    >
+      <n-scrollbar>
+        <n-text v-html="artistData.desc.replace(/\n/g, '<br>')" />
+      </n-scrollbar>
+    </n-modal>
   </div>
+
+  <div class="title" v-else-if="!artistId">
+    <span class="key">{{ $t("general.name.noKeywords") }}</span>
+    <br />
+    <n-button strong secondary @click="router.go(-1)" style="margin-top: 20px">
+      {{ $t("general.name.goBack") }}
+    </n-button>
+  </div>
+  <PageLoadState v-else-if="loadFailed" error @retry="getArtistDetailData(artistId)" />
+  <DetailPageSkeleton v-else kind="artist" />
 </template>
 
-<script setup>
-import { useRouter } from "vue-router";
+<script setup lang="ts">
+import { useRouter, useRoute } from "vue-router";
 import { userStore } from "@/store";
-import { getArtistDetail, likeArtist } from "@/api/artist";
+import { getArtistDetail, getArtistSongs, likeArtist } from "@/api/artist";
 import {
   MusicNoteFilled,
   AlbumFilled,
   VideocamRound,
   PersonAddAlt1Round,
   PersonRemoveAlt1Round,
+  PlayArrowRound,
+  MoreHorizRound,
 } from "@vicons/material";
 import { useI18n } from "vue-i18n";
+import { useTabTransition } from "@/composables/useTabTransition";
+import { usePlayAllSong } from "@/composables/usePlayAllSong";
+import { useContentPanelAccent } from "@/composables/useContentPanelAccent";
+import { transformSongData } from "@/utils/ncm/transformSongData";
+import getCoverUrl from "@/utils/ncm/getCoverUrl";
+import DetailPageSkeleton from "@/components/Navigation/DetailPageSkeleton.vue";
+import RouteArtwork from "@/components/Navigation/RouteArtwork.vue";
+import RouteCover from "@/components/Navigation/RouteCover.vue";
+import RouteShadow from "@/components/Navigation/RouteShadow.vue";
+import PageLoadState from "@/components/Navigation/PageLoadState.vue";
+import { useLayerNavigation } from "@/utils/navigation";
+import { useContentIntro } from "@/composables/useContentIntro";
 
 const { t } = useI18n();
 const router = useRouter();
+const route = useRoute();
+const navigation = useLayerNavigation();
+const { vContentIntro } = useContentIntro();
 const user = userStore();
+const { playAllSong } = usePlayAllSong();
+const { applyContentPanelAccent } = useContentPanelAccent();
+const { transitionName, updateDirection, syncIndex } = useTabTransition([
+  "songs",
+  "albums",
+  "videos",
+]);
 
-// 歌手数据
-const artistId = ref(router.currentRoute.value.query.id);
-const artistData = ref(null);
+interface ArtistDetailData {
+  id: number;
+  name: string;
+  occupation: string | null;
+  cover: string;
+  desc: string;
+  albumSize: number;
+  musicSize: number;
+  mvSize: number;
+}
+
+const artistId = ref(route.query.id);
+const loadFailed = ref(false);
+const artistData = ref<ArtistDetailData | null>(null);
+const artistHotSongs = ref<any[]>([]);
+const artistSongsLoading = ref(false);
 const artistDescShow = ref(false);
 const artistLikeBtn = ref(false);
 
-// Tab 默认选中
-const tabValue = ref(router.currentRoute.value.path.split("/")[2]);
+const safeArtistCover = computed(() =>
+  artistData.value?.cover
+    ? artistData.value.cover.replace(/^http:/, "https:")
+    : "/images/pic/default.png",
+);
 
-// 获取歌手数据
-const getArtistDetailData = (id) => {
-  if (id) {
-    getArtistDetail(id)
-      .then((res) => {
-        console.log(res);
-        artistData.value = {
-          id: res.data.artist.id,
-          name: res.data.artist.name,
-          occupation: res.data.identify ? res.data.identify.imageDesc : null,
-          cover: res.data.artist.cover,
-          desc: res.data.artist.briefDesc,
-          albumSize: res.data.artist.albumSize,
-          musicSize: res.data.artist.musicSize,
-          mvSize: res.data.artist.mvSize,
-        };
+const tabValue = ref(route.path.split("/")[2]);
+syncIndex(tabValue.value);
+
+const getArtistDetailData = (id: string | number | string[]) => {
+  if (!id) return;
+  loadFailed.value = false;
+  getArtistDetail(Number(id), { hiddenBar: true })
+    .then((res) => {
+      artistData.value = {
+        id: res.data.artist.id,
+        name: res.data.artist.name,
+        occupation: res.data.identify ? res.data.identify.imageDesc : null,
+        cover: res.data.artist.cover,
+        desc: res.data.artist.briefDesc,
+        albumSize: res.data.artist.albumSize,
+        musicSize: res.data.artist.musicSize,
+        mvSize: res.data.artist.mvSize,
+      };
+      artistHotSongs.value = [];
+      applyContentPanelAccent(getCoverUrl(res.data.artist.cover, 256));
+      if (
+        router.currentRoute.value.path.startsWith("/artist/") &&
+        String(router.currentRoute.value.query.id) === String(id)
+      ) {
         $setSiteTitle(res.data.artist.name + " - " + t("general.name.artists"));
-        // 请求后回顶
-        if (typeof $scrollToTop !== "undefined") $scrollToTop();
-      })
-      .catch((err) => {
-        router.go(-1);
-        console.error(t("general.message.acquisitionFailed"), err);
-        $message.error(t("general.message.acquisitionFailed"));
-      });
+      }
+    })
+    .catch((err) => {
+      loadFailed.value = true;
+      console.warn("[artist] detail failed to load", err);
+    });
+};
+
+const playArtistSongs = async () => {
+  if (!artistId.value || artistSongsLoading.value) return;
+  artistSongsLoading.value = true;
+  try {
+    if (!artistHotSongs.value.length) {
+      const res = await getArtistSongs(Number(artistId.value));
+      artistHotSongs.value = res.hotSongs?.length ? transformSongData(res.hotSongs) : [];
+    }
+    if (artistHotSongs.value.length) {
+      playAllSong(artistHotSongs.value);
+    } else {
+      $message.warning(t("general.message.acquisitionFailed"));
+    }
+  } catch (err) {
+    console.error(t("general.message.acquisitionFailed"), err);
+    $message.error(t("general.message.acquisitionFailed"));
+  } finally {
+    artistSongsLoading.value = false;
   }
 };
 
-// Tab 选项卡变化
-const tabChange = (value) => {
-  console.log(value);
-  router.push({
+const tabChange = (value: any) => {
+  updateDirection(value);
+  navigation.replacePage({
     path: `/artist/${value}`,
     query: {
       id: artistId.value,
@@ -178,32 +263,20 @@ const tabChange = (value) => {
   });
 };
 
-// 判断收藏还是取消
-const isLikeOrDislike = (id) => {
-  if (user.getUserArtistLists.list[0]) {
-    const index = user.getUserArtistLists.list.findIndex(
-      (item) => item.id === Number(id)
-    );
-    if (index !== -1) {
-      return false;
-    }
-    return true;
-  } else {
-    return true;
-  }
+const isLikeOrDislike = (id: string | string[]) => {
+  return !user.getUserArtistIds.has(Number(id));
 };
 
-// 收藏/取消收藏歌手
-const toLikeArtist = (data) => {
-  const type = isLikeOrDislike(data.id) ? 1 : 2;
+const toLikeArtist = (data: { id: number; name: any }) => {
+  const type = isLikeOrDislike(data.id.toString()) ? 1 : 2;
   likeArtist(type, data.id).then((res) => {
     if (res.code === 200) {
       $message.success(
         `${data.name} ${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.success") })
             : t("menu.cancelCollection", { name: t("general.dialog.success") })
-        }`
+        }`,
       );
       user.setUserArtistLists(() => {
         artistLikeBtn.value = isLikeOrDislike(artistId.value);
@@ -211,10 +284,10 @@ const toLikeArtist = (data) => {
     } else {
       $message.error(
         `${data.name} ${
-          type == 1
+          type === 1
             ? t("menu.collection", { name: t("general.dialog.failed") })
             : t("menu.cancelCollection", { name: t("general.dialog.failed") })
-        }`
+        }`,
       );
     }
   });
@@ -223,144 +296,305 @@ const toLikeArtist = (data) => {
 onMounted(() => {
   getArtistDetailData(artistId.value);
   artistLikeBtn.value = isLikeOrDislike(artistId.value);
-  if (
-    user.userLogin &&
-    !user.getUserArtistLists.has &&
-    !user.getUserArtistLists.isLoading
-  ) {
+  if (user.userLogin && !user.getUserArtistLists.has && !user.getUserArtistLists.isLoading) {
     user.setUserArtistLists(() => {
-      console.log("执行回调", artistId.value, isLikeOrDislike(artistId.value));
       artistLikeBtn.value = isLikeOrDislike(artistId.value);
     });
   }
 });
 
-// 监听路由参数变化
 watch(
-  () => router.currentRoute.value,
-  (val) => {
-    artistId.value = val.query.id;
-    tabValue.value = val.path.split("/")[2];
-    artistLikeBtn.value = isLikeOrDislike(artistId.value);
-    if (val.path.split("/")[1] == "artist") {
-      getArtistDetailData(artistId.value);
-    }
-  }
+  () => route.path,
+  (path) => {
+    tabValue.value = path.split("/")[2];
+    syncIndex(tabValue.value);
+  },
 );
 </script>
 
 <style lang="scss" scoped>
 .artist {
-  margin-top: 30px;
-  .error {
-    margin-top: 30px;
-    margin-bottom: 20px;
-    .n-text {
-      font-size: 40px;
-      font-weight: bold;
-      margin-right: 8px;
-    }
-  }
-  .artistData {
-    display: flex;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 10px clamp(16px, 3vw, 36px) 36px;
+
+  .left {
+    width: 100%;
+    min-height: 0;
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(176px, 278px) minmax(0, 1fr);
     align-items: center;
-    margin-bottom: 40px;
-    @media (max-width: 768px) {
-      flex-direction: column;
-      margin-bottom: 30px;
-      .cover {
-        margin-right: 0 !important;
-        margin-bottom: 20px;
-        .n-avatar {
-          height: 200px !important;
-          width: 200px !important;
-        }
-      }
-      .data {
-        align-items: center;
-        .name {
-          font-size: 26px !important;
-          margin-bottom: 10px !important;
-        }
-        .occupation {
-          font-size: 16px !important;
-        }
-        .num {
-          margin-top: 8px !important;
-        }
-      }
-    }
+    gap: clamp(22px, 4vw, 38px);
+    padding: 18px 2px 18px;
+
     .cover {
-      margin-right: 40px;
+      position: relative;
       display: flex;
       align-items: center;
-      .n-avatar {
-        height: 240px;
-        width: 240px;
-        box-shadow: 0 0 16px 0px rgb(0 0 0 / 20%);
+      justify-content: flex-start;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+
+      &:active {
+        transform: scale(0.95);
+      }
+
+      .coverImg {
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+
+        :deep(img) {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+      }
+
+      .shadow {
+        position: absolute;
+        inset: 10px 0 0;
+        height: 100%;
+        width: 100%;
+        filter: blur(18px) opacity(0.28);
+        transform: scale(0.92, 0.94);
+        z-index: 0;
+        background-size: cover;
+        aspect-ratio: 1 / 1;
+
+        :deep(img) {
+          width: 100%;
+          height: 100%;
+          border-radius: var(--radius-md);
+        }
       }
     }
-    .data {
+
+    .meta {
+      width: 100%;
+      min-width: 0;
       display: flex;
       flex-direction: column;
-      .name {
-        font-size: 40px;
-        font-weight: bold;
-        margin-bottom: 4px;
-        margin-left: 2px;
+      justify-content: flex-end;
+
+      .n-text {
+        color: inherit;
       }
-      .occupation {
-        font-size: 18px;
-        margin-left: 4px;
-      }
-      .num {
-        margin-top: 12px;
+
+      .title {
         display: flex;
+        flex-direction: column;
+        min-width: 0;
+        margin-top: 0;
+
+        .detail-kind {
+          margin-bottom: 7px;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1;
+          text-transform: uppercase;
+          color: rgb(var(--content-panel-accent-rgb, 128, 128, 128));
+        }
+
+        .name {
+          display: -webkit-box;
+          max-width: min(780px, 100%);
+          overflow: hidden;
+          font-size: clamp(32px, 5vw, 56px);
+          font-weight: 800;
+          line-height: normal;
+          overflow-wrap: anywhere;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+        }
+
+        .creator {
+          width: fit-content;
+          margin-top: 10px;
+          font-size: 15px;
+          font-weight: 700;
+          color: var(--n-text-color-2);
+        }
+      }
+
+      .detail-stats {
+        display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        span {
+        gap: 8px 14px;
+        margin-top: 13px;
+        color: var(--n-text-color-3);
+
+        .num {
+          appearance: none;
           display: flex;
           align-items: center;
-          margin-right: 16px;
+          min-width: 0;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: inherit;
+          font-size: 13px;
           cursor: pointer;
-          transition: all 0.3s;
+
           .n-icon {
-            color: var(--main-color);
-            transform: translateY(-1px);
-            font-size: 16px;
-            margin-right: 4px;
+            flex: 0 0 auto;
+            margin-right: 5px;
           }
+
           &:hover {
-            color: var(--main-color);
+            color: rgb(var(--content-panel-accent-rgb, 128, 128, 128));
           }
         }
       }
-      .desc {
-        margin-top: 12px;
-        -webkit-line-clamp: 2;
-        cursor: pointer;
-        transition: all 0.3s;
-        &:hover {
-          opacity: 0.8;
+
+      .intr {
+        max-width: 760px;
+        margin-top: 14px;
+
+        .name {
+          display: none;
+        }
+
+        .desc {
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+          line-height: 22px;
+          color: var(--n-text-color-3);
+        }
+
+        .all-desc {
+          width: fit-content;
+          margin-top: 12px;
         }
       }
-      .button {
-        margin-top: 18px;
+
+      .control {
+        margin-top: 16px;
+
+        :deep(.n-button) {
+          --n-color: rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.86);
+          --n-color-hover: rgb(var(--content-panel-button-rgb, 226, 154, 128));
+          --n-color-pressed: rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.74);
+          --n-color-focus: rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.92);
+          --n-text-color: rgb(var(--content-panel-on-button-rgb, 18, 18, 22));
+          --n-text-color-hover: rgb(var(--content-panel-on-button-rgb, 18, 18, 22));
+          --n-text-color-pressed: rgb(var(--content-panel-on-button-rgb, 18, 18, 22));
+          --n-text-color-focus: rgb(var(--content-panel-on-button-rgb, 18, 18, 22));
+          --n-border: 1px solid rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.24);
+          --n-border-hover: 1px solid rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.36);
+          --n-border-pressed: 1px solid rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.24);
+          --n-border-focus: 1px solid rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.38);
+
+          height: 34px;
+          border: 1px solid rgba(var(--content-panel-on-button-rgb, 18, 18, 22), 0.16);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.26),
+            inset 0 0 0 1px rgba(var(--content-panel-button-rgb, 226, 154, 128), 0.2),
+            0 8px 18px rgba(var(--content-panel-accent-rgb, 0, 0, 0), 0.12);
+          font-weight: 700;
+        }
+
+        :deep(.n-button:not(.icon-action)) {
+          min-width: 112px;
+        }
+
+        :deep(.icon-action) {
+          width: 34px;
+          min-width: 34px;
+        }
+
+        :deep(.n-button .n-button__border),
+        :deep(.n-button .n-button__state-border) {
+          border-color: transparent !important;
+        }
       }
     }
   }
+
+  .main-tab {
+    margin-top: 0;
+  }
+
   .content {
-    margin-top: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  @media (max-width: 768px) {
+    gap: 14px;
+    padding: 8px 14px 28px;
+
+    .left {
+      min-height: 0;
+      grid-template-columns: 1fr;
+      align-items: start;
+      gap: 16px;
+      padding: 12px 0 18px;
+
+      .cover {
+        justify-self: center;
+        width: min(58vw, 260px);
+      }
+
+      .meta {
+        .title {
+          .detail-kind {
+            margin-bottom: 7px;
+          }
+
+          .name {
+            font-size: clamp(25px, 8vw, 36px);
+            line-height: normal;
+          }
+
+          .creator {
+            margin-top: 9px;
+            font-size: 14px;
+          }
+        }
+
+        .detail-stats {
+          margin-top: 12px;
+        }
+
+        .intr {
+          margin-top: 16px;
+        }
+
+        .control {
+          margin-top: 16px;
+
+          :deep(.n-button) {
+            height: 38px;
+          }
+        }
+      }
+    }
+  }
+
+  @media (max-width: 540px) {
+    .left {
+      .cover {
+        width: min(64vw, 235px);
+      }
+    }
   }
 }
-// 路由跳转动画
-.move-enter-active,
-.move-leave-active {
-  transition: all 0.2s ease;
-}
 
-.move-enter-from,
-.move-leave-to {
-  opacity: 0;
-  transform: translateX(10px);
+.title {
+  margin-top: 30px;
+  margin-bottom: 20px;
+  font-size: 24px;
+
+  .key {
+    margin-right: 8px;
+    font-size: 40px;
+    font-weight: bold;
+  }
 }
 </style>

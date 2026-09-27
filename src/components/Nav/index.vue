@@ -1,558 +1,348 @@
 <template>
-  <nav>
+  <nav
+    :class="{
+      'tauri-app': isTauri() && !isMobileState,
+      'mobile-nav': isCompactViewport,
+      dark: setting.getSiteTheme === 'dark',
+    }"
+    :aria-label="$t('navigation.label')"
+  >
     <div class="left">
-      <div class="logo" @click="router.push('/')">
-        <img :src="logoUrl" alt="logo" />
-      </div>
-      <Transition name="fade" mode="out-in">
-        <div v-show="!site.searchInputActive" class="controls">
-          <n-icon size="22" :component="Left" @click="router.go(-1)" />
-          <n-icon size="22" :component="Right" @click="router.go(1)" />
-        </div>
-      </Transition>
-    </div>
-    <div class="center">
-      <router-link class="link" to="/">{{ $t("nav.home") }}</router-link>
-      <n-dropdown
-        trigger="hover"
-        :options="discoverOptions"
-        @select="menuSelect"
+      <button
+        v-if="isCompactViewport && navigation.canGoBack.value"
+        type="button"
+        class="layer-back"
+        :aria-label="$t('general.name.goBack')"
+        @click="navigation.closeTop()"
       >
-        <router-link class="link" to="/discover">
-          {{ $t("nav.discover") }}
-        </router-link>
-      </n-dropdown>
-      <n-dropdown trigger="hover" :options="userOptions" @select="menuSelect">
-        <router-link class="link" to="/user">{{ $t("nav.user") }}</router-link>
-      </n-dropdown>
+        <n-icon size="26" :component="Left" />
+        <span>{{ backLabel }}</span>
+      </button>
+      <div v-else-if="!isCompactViewport" class="controls">
+        <button type="button" :aria-label="$t('general.name.goBack')" @click="router.back()">
+          <n-icon size="22" :component="Left" />
+        </button>
+        <button type="button" :aria-label="$t('navigation.forward')" @click="router.forward()">
+          <n-icon size="22" :component="Right" />
+        </button>
+      </div>
     </div>
     <div class="right">
-      <SearchInp />
-      <!-- 移动端菜单 -->
-      <n-dropdown trigger="click" :options="mbMenuOptions" @select="menuSelect">
-        <n-button class="mb-menu" circle>
-          <template #icon>
-            <n-icon :component="HamburgerButton" />
-          </template>
-        </n-button>
-      </n-dropdown>
-      <!-- 下拉菜单 -->
-      <n-dropdown
-        placement="bottom-end"
-        :show="showDropdown"
-        :show-arrow="true"
-        :options="dropdownOptions"
-        :on-clickoutside="closeDropdown"
-        @select="dropdownSelect"
+      <SearchInp v-if="showNavSearch" location="nav" class="nav-search" />
+      <button
+        type="button"
+        class="action-icon"
+        :aria-label="$t('setting.theme')"
+        @click="toggleTheme"
       >
-        <n-avatar
-          class="avatar"
-          round
-          size="small"
-          :src="
-            user.getUserData.avatarUrl
-              ? user.getUserData.avatarUrl.replace(/^http:/, 'https:') +
-                '?param=60y60'
-              : '/images/ico/user-filling.svg'
-          "
-          :img-props="{ class: 'avatarImg' }"
-          fallback-src="/images/ico/user-filling.svg"
-          @click="showDropdown = !showDropdown"
-        />
-      </n-dropdown>
-      <!-- 关于本站 -->
-      <AboutSite ref="aboutSiteRef" />
+        <n-icon size="18" :component="setting.getSiteTheme === 'light' ? Moon : SunOne" />
+      </button>
     </div>
   </nav>
 </template>
 
-<script setup>
-import { NIcon, NAvatar, NText, NProgress } from "naive-ui";
-import {
-  Left,
-  Right,
-  Login,
-  Logout,
-  Info,
-  SettingTwo,
-  History,
-  SunOne,
-  Moon,
-  HamburgerButton,
-  HomeTwo,
-  FindOne,
-  Me,
-} from "@icon-park/vue-next";
-import { userStore, settingStore, siteStore } from "@/store";
+<script setup lang="ts">
+import { NIcon } from "naive-ui";
+import { Left, Right, Moon, SunOne } from "@icon-park/vue-next";
+import { settingStore } from "@/store";
 import { useRouter } from "vue-router";
-import { useI18n } from "vue-i18n";
-import AboutSite from "@/components/DataModal/AboutSite.vue";
 import SearchInp from "@/components/SearchInp/index.vue";
+import { isTauri, isMobile, isMobileDevice } from "@/utils/tauri";
+import { ref, onMounted, onUnmounted, computed } from "vue";
+import { useLayerNavigation } from "@/utils/navigation";
+import { useI18n } from "vue-i18n";
 
-const { t } = useI18n();
 const router = useRouter();
-const user = userStore();
-const site = siteStore();
+const navigation = useLayerNavigation();
+const { t } = useI18n();
 const setting = settingStore();
-const aboutSiteRef = ref(null);
-const timeOut = ref(null);
-const logoUrl = import.meta.env.VITE_SITE_LOGO;
+const backLabel = computed(() => {
+  const parent = navigation.state.value.layers.at(-2);
+  return parent?.label
+    ? t(parent.label)
+    : t(`sidebar.tab.${navigation.current.value?.root ?? "home"}`);
+});
+const isMobileState = ref(isMobileDevice());
+const compactViewportQuery = window.matchMedia("(max-width: 768px)");
+const isCompactViewport = ref(compactViewportQuery.matches);
+const updateCompactViewport = (event: MediaQueryListEvent) => {
+  isCompactViewport.value = event.matches;
+};
+const showNavSearch = computed(() => isMobileState.value || isCompactViewport.value);
 
-// 下拉菜单显隐
-const showDropdown = ref(false);
-const closeDropdown = (event) => {
-  // 解决点击头像无法关闭
-  if (event.target.className == "avatarImg") {
-    showDropdown.value = true;
+onMounted(async () => {
+  compactViewportQuery.addEventListener("change", updateCompactViewport);
+  isMobileState.value = await isMobile();
+});
+onUnmounted(() => compactViewportQuery.removeEventListener("change", updateCompactViewport));
+
+const toggleTheme = (event: MouseEvent) => {
+  const root = document.documentElement;
+  const target = event.currentTarget;
+  const rect = target instanceof Element ? target.getBoundingClientRect() : null;
+  const x = event.clientX || (rect ? rect.left + rect.width / 2 : window.innerWidth / 2);
+  const y = event.clientY || (rect ? rect.top + rect.height / 2 : window.innerHeight / 2);
+  root.style.setProperty("--theme-transition-x", `${x}px`);
+  root.style.setProperty("--theme-transition-y", `${y}px`);
+  root.dataset.themeTransitionOrigin = "custom";
+
+  const nextTheme = setting.getSiteTheme === "light" ? "dark" : "light";
+  if (typeof window.$setSiteThemeWithTransition === "function") {
+    window.$setSiteThemeWithTransition(nextTheme);
   } else {
-    showDropdown.value = false;
+    setting.setSiteTheme(nextTheme);
   }
 };
-
-// 图标渲染
-const renderIcon = (icon) => {
-  return () => {
-    return h(
-      NIcon,
-      { style: { transform: "translateX(2px) translateY(1px)" } },
-      {
-        default: () => icon,
-      }
-    );
-  };
-};
-
-// 用户数据模块
-const userDataRender = () => {
-  return h(
-    "div",
-    {
-      style:
-        "display: flex; align-items: center; padding: 8px 12px; cursor: pointer",
-      onclick: () => {
-        user.userLogin ? router.push("/user") : router.push("/login");
-        showDropdown.value = false;
-      },
-    },
-    [
-      h(NAvatar, {
-        round: true,
-        style: "margin-right: 12px",
-        src: user.userLogin
-          ? user.getUserData.avatarUrl.replace(/^http:/, "https:") +
-            "?param=60y60"
-          : "/images/ico/user-filling.svg",
-        fallbackSrc: "/images/ico/user-filling.svg",
-      }),
-      h("div", null, [
-        h("div", null, [
-          h(
-            NText,
-            { depth: 2 },
-            {
-              default: () =>
-                user.userLogin
-                  ? user.getUserData.nickname
-                  : t("nav.avatar.notLogin"),
-            }
-          ),
-        ]),
-        h("div", { style: "font-size: 12px;" }, [
-          h(
-            NText,
-            { depth: 3 },
-            {
-              default: () =>
-                user.userLogin
-                  ? Object.keys(user.getUserOtherData).length
-                    ? h(
-                        NProgress,
-                        {
-                          height: 4,
-                          type: "line",
-                          percentage:
-                            user.getUserOtherData.level.progress * 100,
-                          color: setting.themeData.primaryColor,
-                        },
-                        {
-                          default: () =>
-                            "Lv." + user.getUserOtherData.level.level,
-                        }
-                      )
-                    : t("nav.avatar.loginError")
-                  : t("nav.avatar.notLoginSubtitle"),
-            }
-          ),
-        ]),
-      ]),
-    ]
-  );
-};
-
-// 下拉框数据
-const discoverOptions = ref([]);
-const userOptions = ref([]);
-const dropdownOptions = ref([]);
-
-// 写入下拉框数据
-const changeDiscoverOptions = () => {
-  discoverOptions.value = [
-    {
-      label: t("nav.discoverChildren.playlists"),
-      key: "/discover/playlists",
-    },
-    {
-      label: t("nav.discoverChildren.toplists"),
-      key: "/discover/toplists",
-    },
-    {
-      label: t("nav.discoverChildren.artists"),
-      key: "/discover/artists",
-    },
-  ];
-};
-const changeUserOptions = (val) => {
-  userOptions.value = val
-    ? [
-        {
-          label: t("nav.userChildren.playlist"),
-          key: "/user/playlists",
-        },
-        {
-          label: t("nav.userChildren.like"),
-          key: "/user/like",
-        },
-        {
-          label: t("nav.userChildren.album"),
-          key: "/user/album",
-        },
-        {
-          label: t("nav.userChildren.artist"),
-          key: "/user/artists",
-        },
-        {
-          label: t("nav.userChildren.cloud"),
-          key: "/user/cloud",
-        },
-      ]
-    : [
-        {
-          label: t("nav.userChildren.login"),
-          key: "/login",
-        },
-      ];
-};
-const changeDropdownOptions = () => {
-  dropdownOptions.value = [
-    {
-      key: "header",
-      type: "render",
-      render: userDataRender,
-    },
-    {
-      key: "header-divider",
-      type: "divider",
-    },
-    {
-      label: () => {
-        return h(
-          NText,
-          { style: { transform: "translateX(2px) translateY(1px)" } },
-          {
-            default: () =>
-              setting.getSiteTheme == "light"
-                ? t("nav.avatar.dark")
-                : t("nav.avatar.light"),
-          }
-        );
-      },
-      key: "changeTheme",
-      icon: () => {
-        return h(
-          NIcon,
-          { style: { transform: "translateX(2px) translateY(1px)" } },
-          {
-            default: () =>
-              setting.getSiteTheme == "light" ? h(Moon) : h(SunOne),
-          }
-        );
-      },
-    },
-    {
-      label: t("nav.avatar.history"),
-      key: "history",
-      icon: renderIcon(h(History)),
-    },
-    {
-      label: t("nav.avatar.setting"),
-      key: "setting",
-      icon: renderIcon(h(SettingTwo)),
-    },
-    {
-      label: () => {
-        return h(
-          NText,
-          { style: { transform: "translateX(2px) translateY(1px)" } },
-          {
-            default: () =>
-              user.userLogin ? t("nav.avatar.logout") : t("nav.avatar.login"),
-          }
-        );
-      },
-      key: "user",
-      icon: () => {
-        return h(
-          NIcon,
-          { style: { transform: "translateX(2px) translateY(1px)" } },
-          {
-            default: () => (user.userLogin ? h(Logout) : h(Login)),
-          }
-        );
-      },
-    },
-    {
-      label: t("nav.avatar.about"),
-      key: "about",
-      icon: renderIcon(h(Info)),
-    },
-  ];
-};
-
-// 移动端菜单
-const mbMenuOptions = ref([]);
-const changeMbMenuOptions = () => {
-  mbMenuOptions.value = [
-    {
-      label: t("nav.home"),
-      key: "/",
-      icon: renderIcon(h(HomeTwo)),
-    },
-    {
-      label: t("nav.discover"),
-      key: "/discover",
-      icon: renderIcon(h(FindOne)),
-    },
-    {
-      label: t("nav.user"),
-      key: "/user",
-      icon: renderIcon(h(Me)),
-    },
-  ];
-};
-
-// 下拉框点击事件
-const menuSelect = (key) => {
-  router.push(key);
-};
-const dropdownSelect = (key) => {
-  showDropdown.value = false;
-  switch (key) {
-    // 明暗切换
-    case "changeTheme":
-      setting.getSiteTheme === "light"
-        ? setting.setSiteTheme("dark")
-        : setting.setSiteTheme("light");
-      setting.themeAuto = false;
-      break;
-    // 播放历史
-    case "history":
-      router.push("/history");
-      break;
-    // 设置
-    case "setting":
-      router.push("/setting");
-      break;
-    // 用户
-    case "user":
-      if (user.userLogin) {
-        // 退出登录
-        $dialog.warning({
-          class: "s-dialog",
-          title: t("nav.avatar.logout"),
-          content: t("nav.avatar.tip"),
-          positiveText: t("nav.avatar.logout"),
-          negativeText: t("general.dialog.cancel"),
-          onPositiveClick: () => {
-            user.userLogOut();
-            $message.success(t("nav.avatar.success"));
-            // 刷新页面
-            timeOut.value = setTimeout(() => {
-              document.location.reload();
-            }, 1000);
-          },
-        });
-      } else {
-        // 登录
-        router.push("/login");
-      }
-      break;
-    // 关于
-    case "about":
-      aboutSiteRef.value.openAboutSite();
-      break;
-    default:
-      break;
-  }
-};
-
-// 监听登录状态变化
-watch(
-  () => user.userLogin,
-  (val) => {
-    changeUserOptions(val);
-  }
-);
-
-// 监听语言变化
-watch(
-  () => setting.language,
-  () => {
-    changeDiscoverOptions();
-    changeMbMenuOptions();
-    changeDropdownOptions();
-    changeUserOptions(user.userLogin);
-  }
-);
-
-onMounted(() => {
-  changeDiscoverOptions();
-  changeMbMenuOptions();
-  changeDropdownOptions();
-  changeUserOptions(user.userLogin);
-});
-
-onBeforeUnmount(() => {
-  clearTimeout(timeOut.value);
-});
 </script>
 
 <style lang="scss" scoped>
 nav {
+  --nav-control-height: 32px;
+  --nav-icon-button-size: 26px;
+
   width: 100%;
-  height: 100%;
+  height: 34px;
+  min-height: 34px;
   display: flex;
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  max-width: 1400px;
-  margin: 0 auto;
-  .fade-enter-active,
-  .fade-leave-active {
-    transition: opacity 0.5s ease;
-  }
-  .fade-enter-active {
-    transition-delay: 0.5s;
-  }
-  .fade-enter-from,
-  .fade-leave-to {
-    opacity: 0;
-  }
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+
   .left {
-    flex: 1;
-    max-width: 300px;
     display: flex;
     flex-direction: row;
     align-items: center;
-    @media (max-width: 990px) {
-      flex: initial;
-    }
-    .logo {
-      width: 30px;
-      height: 30px;
-      margin-right: 12px;
-      transition: all 0.3s;
-      cursor: pointer;
-      img {
-        width: 100%;
-        height: 100%;
-      }
-      @media (min-width: 640px) {
-        &:hover {
-          transform: scale(1.15);
-        }
-      }
-      &:active {
-        transform: scale(1);
-      }
-    }
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+
     .controls {
+      pointer-events: auto;
       display: flex;
       flex-direction: row;
       align-items: center;
+      gap: 2px;
+      height: var(--nav-control-height);
+      box-sizing: border-box;
+      padding: 2px;
+      border: 1px solid var(--acrylic-border, rgba(0, 0, 0, 0.06));
+      border-radius: var(--radius-pill);
+      background-color: var(--floating-control-bg, rgba(255, 255, 255, 0.48));
+      box-shadow:
+        0 8px 22px rgb(0 0 0 / 10%),
+        inset 0 1px 0 rgb(255 255 255 / 24%);
+      -webkit-backdrop-filter: blur(18px) saturate(160%);
+      backdrop-filter: blur(18px) saturate(160%);
+
       .n-icon {
-        margin: 0 4px;
-        border-radius: 8px;
-        padding: 4px;
+        width: var(--nav-icon-button-size);
+        height: var(--nav-icon-button-size);
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        border-radius: var(--radius-pill);
+        padding: 3px;
         cursor: pointer;
-        transition: all 0.3s;
+        transition:
+          background-color var(--duration-200) var(--ease-out),
+          transform var(--duration-200) var(--ease-out);
+
         @media (min-width: 640px) {
           &:hover {
-            background-color: var(--n-border-color);
+            background-color: var(--hover-overlay);
           }
         }
+
         &:active {
           transform: scale(0.95);
         }
       }
     }
   }
-  .center {
-    flex: 1;
+
+  .right {
     display: flex;
     flex-direction: row;
     align-items: center;
-    justify-content: center;
-    @media (max-width: 768px) {
-      display: none;
-    }
-    .link {
-      display: block;
-      text-decoration: none;
-      color: var(--n-text-color);
-      padding: 6px 16px;
-      margin: 0 2px;
-      border-radius: 8px;
-      transition: all 0.3s;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    flex: 0 1 auto;
+
+    .action-icon {
+      flex: 0 0 auto;
+      width: var(--nav-control-height);
+      height: var(--nav-control-height);
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
       cursor: pointer;
+      padding: 0;
+      border: 1px solid var(--acrylic-border, rgba(0, 0, 0, 0.06));
+      border-radius: var(--radius-pill);
+      background-color: var(--floating-control-bg, rgba(255, 255, 255, 0.48));
+      box-shadow:
+        0 8px 22px rgb(0 0 0 / 8%),
+        inset 0 1px 0 rgb(255 255 255 / 20%);
+      -webkit-backdrop-filter: blur(18px) saturate(160%);
+      backdrop-filter: blur(18px) saturate(160%);
+      transition:
+        background-color var(--duration-200) var(--ease-out),
+        transform var(--duration-200) var(--ease-out),
+        color var(--duration-200) var(--ease-out);
+
       &:hover {
-        background-color: var(--main-color);
-        color: rgba(255, 255, 255, 0.9);
+        background-color: var(--hover-overlay);
       }
+
       &:active {
         transform: scale(0.95);
       }
     }
 
-    .router-link-active {
-      background-color: var(--main-color);
-      color: rgba(255, 255, 255, 0.9);
+    .nav-search {
+      pointer-events: auto;
+      min-width: 0;
+      flex: 0 1 clamp(128px, 36vw, 220px);
+      width: clamp(128px, 36vw, 220px);
+
+      @media (min-width: 769px) {
+        display: none;
+      }
+
+      @media (max-width: 450px) {
+        flex: 0 0 auto;
+        width: auto;
+      }
     }
   }
-  .right {
-    flex: 1;
-    max-width: 300px;
+
+  &.tauri-app {
+    --nav-control-height: 30px;
+    --nav-icon-button-size: 24px;
+
+    height: 30px;
+    min-height: 30px;
+    --floating-control-bg: rgba(255, 255, 255, 0.42);
+  }
+
+  &.dark {
+    --floating-control-bg: rgba(24, 24, 24, 0.5);
+
+    .controls .n-icon:hover,
+    .right .action-icon:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+  }
+
+  @media (max-width: 768px) {
+    height: calc(42px + var(--app-safe-area-top, 0px));
+    min-height: calc(42px + var(--app-safe-area-top, 0px));
+    padding-top: var(--app-safe-area-top, 0px);
+    box-sizing: border-box;
+    // The mobile header band behind these controls is itself blurred and tinted
+    // (see .content-top-shadow in App.vue). Lift the pill fill and border so the
+    // buttons still read as a layer above that band, and tighten the shadow —
+    // a wide soft drop shadow over blur just muddies into a gray halo.
+    --floating-control-bg: rgba(255, 255, 255, 0.62);
+    --acrylic-border: rgba(0, 0, 0, 0.07);
+    --nav-pill-specular: rgba(255, 255, 255, 0.7);
+    --nav-pill-grade: saturate(180%) brightness(106%) contrast(96%);
+
+    &.dark {
+      --floating-control-bg: rgba(32, 32, 38, 0.6);
+      --acrylic-border: rgba(255, 255, 255, 0.11);
+      --nav-pill-specular: rgba(255, 255, 255, 0.16);
+      // Single pass here (no sibling stack), so these are the final values, not
+      // roots. Contrast under 100% for the same reason as the band's dark grade:
+      // compress the backdrop's range rather than widening it.
+      --nav-pill-grade: saturate(170%) brightness(82%) contrast(88%);
+    }
+
+    // These pills ARE inset glass, so unlike the band they get a specular leading
+    // edge and their own grade. The tight contact shadow replaces the wide soft one
+    // from desktop: over a blurred backdrop a large-radius shadow has nothing crisp
+    // to read against and just smears into a gray halo.
+    // Selectors mirror the base rules' depth (`.left .controls`, `.right
+    // .action-icon`) so these win on source order rather than losing on specificity.
+    .left .controls,
+    .right .action-icon {
+      box-shadow:
+        0 1px 1px rgb(0 0 0 / 5%),
+        0 3px 8px rgb(0 0 0 / 7%),
+        inset 0 1px 0 var(--nav-pill-specular);
+      -webkit-backdrop-filter: blur(12px) var(--nav-pill-grade);
+      backdrop-filter: blur(12px) var(--nav-pill-grade);
+    }
+
+    .left {
+      flex: 0 0 auto;
+    }
+
+    .right {
+      flex: 1 1 auto;
+    }
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--main-color);
+      outline-offset: 2px;
+    }
+  }
+
+  .layer-back {
+    pointer-events: auto;
     display: flex;
-    flex-direction: row;
     align-items: center;
-    justify-content: flex-end;
-    @media (max-width: 520px) {
-      position: absolute;
-      right: 12px;
+    justify-content: flex-start;
+    min-width: 44px;
+    min-height: 44px;
+    max-width: 100%;
+    padding-right: 12px;
+    color: var(--main-color);
+    font-size: 17px;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+    line-height: 1;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity 150ms ease;
+
+    .n-icon {
+      flex: 0 0 26px;
     }
-    .avatar {
-      width: 30px;
-      min-width: 30px;
-      height: 30px;
-      margin-left: 12px;
-      box-shadow: 0 4px 12px -2px rgb(0 0 0 / 10%);
-      cursor: pointer;
+    > span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
-    .mb-menu {
-      margin-left: 12px;
-      display: none;
-      @media (max-width: 768px) {
-        display: flex;
-      }
+    &:active {
+      opacity: 0.45;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .left {
+      min-width: 0;
+      flex: 1 1 0;
+    }
+    .right {
+      flex: 0 0 auto;
     }
   }
 }
